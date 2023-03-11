@@ -6,3 +6,5 @@ luisa_render_add_plugin(group CATEGORY integrator SOURCES group.cpp)
 luisa_render_add_plugin(aov CATEGORY integrator SOURCES aov.cpp)
 luisa_render_add_plugin(direct CATEGORY integrator SOURCES direct.cpp)
 luisa_render_add_plugin(pssmlt CATEGORY integrator SOURCES pssmlt.cpp)
+
+luisa_render_add_plugin(vcm CATEGORY integrator SOURCES vcm.cpp)
