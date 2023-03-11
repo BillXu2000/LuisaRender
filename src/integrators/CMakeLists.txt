@@ -10,3 +10,5 @@ luisa_render_add_plugin(pssmlt CATEGORY integrator SOURCES pssmlt.cpp)
 luisa_render_add_plugin(megapm CATEGORY integrator SOURCES megapm.cpp)
 luisa_render_add_plugin(megavpt CATEGORY integrator SOURCES mega_vpt.cpp)
 luisa_render_add_plugin(megavptnaive CATEGORY integrator SOURCES mega_vpt_naive.cpp)
+
+luisa_render_add_plugin(vcm CATEGORY integrator SOURCES vcm.cpp)
