@@ -251,6 +251,14 @@ Camera::SampleDifferential Camera::Instance::generate_ray_differential(Expr<uint
             .weight = weight};
 }
 
+[[nodiscard]] Expr<uint2> Camera::Instance::get_pixel(Expr<float3> direction, Expr<float> time,
+                                    Expr<float2> u_filter, Expr<float2> u_lens) const noexcept {
+    // bx2k todo: hack pinhole
+    LUISA_ERROR_WITH_LOCATION(
+            "get_pixel should be computed in pinhole class");
+    return make_uint2();
+}
+
 Float4x4 Camera::Instance::camera_to_world() const noexcept {
     return pipeline().transform(node()->transform());
 }
