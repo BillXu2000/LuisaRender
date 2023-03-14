@@ -160,6 +160,24 @@ private:
         });
         return {.eval = sp.eval, .shadow_ray = shadow_ray};
     }
+
+public:
+    [[nodiscard]] LightSampler::Sample sample_light_ray( Expr<uint> tag, Expr<float2> u, Expr<float2> u_w,
+                                                        const SampledWavelengths &swl,
+                                                        Expr<float> time) const noexcept override {
+        LUISA_ASSERT(!pipeline().lights().empty(), "No lights in the scene.");
+        auto it = _sample_area(Float3(), tag, u);
+        auto normal = it->ng();
+        auto wi_local = sample_cosine_hemisphere(u);
+        auto wi = it->shading().local_to_world(wi_local);
+        auto eval = Light::Evaluation::zero(swl.dimension());
+        pipeline().lights().dispatch(it->shape().light_tag(), [&](auto light) noexcept {
+            auto closure = light->closure(swl, time);
+            // eval = closure->evaluate(*it, it->p_shading());
+            eval = Light::Evaluation{.L = SampledSpectrum(1.f), .pdf = 1}; // TODO: light hack
+        });
+        return {.eval = std::move(eval), .shadow_ray = it->spawn_ray(wi)};
+    }
 };
 
 unique_ptr<LightSampler::Instance> UniformLightSampler::build(

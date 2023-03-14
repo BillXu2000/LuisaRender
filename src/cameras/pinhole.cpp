@@ -65,6 +65,19 @@ public:
         auto ray = make_ray(make_float3(), direction);
         return std::make_pair(std::move(ray), 1.f);
     }
+
+    [[nodiscard]] Expr<uint2> get_pixel(Expr<float3> direction, Expr<float> time,
+                                        Expr<float2> u_filter, Expr<float2> u_lens) const noexcept override {
+        // bx2k todo: hack pinhole
+        auto c2w = camera_to_world();
+        auto d = inverse(make_float3x3(c2w)) * direction;
+        auto data = _device_data.read(0u);
+        auto p = make_float2(d / -d[2]);
+        p[1] *= -1;
+        auto pixel = (p / (data.tan_half_fov / data.resolution.y) + data.resolution) / 2.0f;
+        auto [filter_offset, filter_weight] = filter()->sample(u_filter);
+        return make_uint2(floor(pixel - filter_offset));
+    }
 };
 
 luisa::unique_ptr<Camera::Instance> PinholeCamera::build(
