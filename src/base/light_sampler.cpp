@@ -70,4 +70,15 @@ LightSampler::Sample LightSampler::Sample::from_environment(const Environment::S
     return Sample{.eval = s.eval, .shadow_ray = it_from.spawn_ray(s.wi)};
 }
 
+LightSampler::Sample LightSampler::Instance::sample_ray(
+    Expr<float> u_sel, Expr<float2> u_light, Expr<float2> u_w,
+    const SampledWavelengths &swl, Expr<float> time) const noexcept {
+    if (!_pipeline.has_lighting()) { return Sample::zero(swl.dimension()); }
+    auto sel = select({}, u_sel, swl, time);
+    auto sample = Sample::zero(swl.dimension());
+    sample = sample_light_ray(sel.tag, u_light, u_w, swl, time);
+    sample.eval.pdf *= sel.prob;
+    return sample;
+}
+
 }// namespace luisa::render

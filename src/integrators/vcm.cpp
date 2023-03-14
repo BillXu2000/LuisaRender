@@ -4,6 +4,7 @@
 
 #include <util/progress_bar.h>
 #include <base/display.h>
+#include <core/mathematics.h>
 
 namespace luisa::render {
 
@@ -107,31 +108,22 @@ protected:
         auto spectrum = pipeline().spectrum();
         auto swl = spectrum->sample(spectrum->node()->is_fixed() ? 0.f : sampler()->generate_1d());
         SampledSpectrum Li{swl.dimension(), 0.f};
+        SampledSpectrum beta{swl.dimension(), cs.weight};
 
         auto ray = cs.ray;
+
+        auto pixel = camera->get_pixel(ray->direction(), time, u_filter, u_lens);
+
+        // return (pixel[0], pixel[1], 0);
+        // return (make_float2(pixel)[0] / 2000, make_float2(pixel)[0] / 2000, 0);
+        return {pixel[0] - pixel_id[0], 0, 0};
+
 
         $loop {
 
             // trace
             auto wo = -ray->direction();
             auto it = pipeline().geometry()->intersect(ray);
-
-            // miss
-            $if(!it->valid()) {
-                if (pipeline().environment()) {
-                    auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                    Li += cs.weight * eval.L;
-                }
-                $break;
-            };
-
-            // hit light
-            if (!pipeline().lights().empty()) {
-                $if(it->shape()->has_light()) {
-                    auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                    Li += cs.weight * eval.L;
-                };
-            }
 
             // compute direct lighting
             $if(!it->shape()->has_surface()) { $break; };
@@ -142,16 +134,29 @@ protected:
             // sample one light
             auto u_light_selection = sampler()->generate_1d();
             auto u_light_surface = sampler()->generate_2d();
-            light_sample = light_sampler()->sample(
-                *it, u_light_selection, u_light_surface, swl, time);
+            auto u_w = sampler()->generate_2d();
+            light_sample = light_sampler()->sample_ray(
+                u_light_selection, u_light_surface, u_w, swl, time);
+            auto it_light = pipeline().geometry()->intersect(light_sample.shadow_ray);
+            auto ray_connect = it_light->spawn_ray_to(it->p());
+            // auto ray_connect = it_light->spawn_ray_to(ray->origin());
+            occluded = pipeline().geometry()->intersect_any(ray_connect);
 
-            // trace shadow ray
-            $if(light_sample.eval.pdf > 0.f &
-                light_sample.eval.L.any([](auto x) { return x > 0.f; })) {
-                occluded = pipeline().geometry()->intersect_any(light_sample.shadow_ray);
-            };
+            // // trace shadow ray
+            // $if(light_sample.eval.pdf > 0.f &
+            //     light_sample.eval.L.any([](auto x) { return x > 0.f; })) {
+            //     occluded = pipeline().geometry()->intersect_any(light_sample.shadow_ray);
+            // };
+            auto surface_tag = it->shape()->surface_tag();
+            pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
+                auto closure = surface->closure(it, swl, wo, 1.f, time);
+                auto wi = -ray_connect->direction();
+                auto eval = closure->evaluate(wo, wi);
+                beta *= eval.f;
+            });
             $if(light_sample.eval.pdf > 0.0f & !occluded) {
-                Li += cs.weight * light_sample.eval.L / light_sample.eval.pdf;
+                Li += cs.weight * light_sample.eval.L / light_sample.eval.pdf * beta;
+                // Li += cs.weight * light_sample.eval.L;
             };
             $break;
         };
