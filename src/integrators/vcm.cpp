@@ -1,3 +1,4 @@
+#include "core/basic_types.h"
 #include <util/rng.h>
 #include <base/pipeline.h>
 #include <base/integrator.h>
@@ -112,11 +113,43 @@ protected:
 
         auto ray = cs.ray;
 
-        auto pixel = camera->get_pixel(ray->direction(), time, u_filter, u_lens);
+        // auto pixel = camera->get_pixel(ray->direction(), time, u_filter, u_lens);
 
         // return (pixel[0], pixel[1], 0);
         // return (make_float2(pixel)[0] / 2000, make_float2(pixel)[0] / 2000, 0);
-        return {pixel[0] - pixel_id[0], 0, 0};
+        // auto ans = Float3{0, 0, 0};
+        // $if(pixel[0] > pixel_id[0]) {
+        //     ans[0] = 1;
+        // }
+        // $else {
+        //     ans[1] = 1;
+        // };
+        // return ans;
+        // return {pixel[0] - pixel_id[0], 0, 0};
+        // return {camera->filter()->sample(u_filter).offset[0], 0, 0};
+        // auto offset = camera->filter()->sample(u_filter).offset;
+        // auto pixel = camera->get_pixel(ray->direction(), time, make_float2(), u_lens);
+        // Float3 ans{offset[0], offset[1], 0};
+        // Float3 ans{0, 0, 0};
+        // $if (pixel[0] == pixel_id[0]) {
+        //     ans[2] = 1;
+        // };
+        // $if (pixel[0] != pixel_id[0]) {
+        //     ans[2] = -1;
+        // };
+        // $if (offset[0] >= 0) {
+        //     ans[0] = 1;
+        // };
+        // $if (offset[0] <= 1 & offset[0] >= -1) {
+        //     ans[0] = 1;
+        // };
+        // $if (offset[0] > 1 | offset[0] < -0.5f) {
+        //     ans[1] = 1;
+        // };
+        // $if (offset[0] == 0) {
+        //     ans[2] = 1;
+        // };
+        // return ans;
 
 
         $loop {
@@ -138,8 +171,8 @@ protected:
             light_sample = light_sampler()->sample_ray(
                 u_light_selection, u_light_surface, u_w, swl, time);
             auto it_light = pipeline().geometry()->intersect(light_sample.shadow_ray);
-            auto ray_connect = it_light->spawn_ray_to(it->p());
-            // auto ray_connect = it_light->spawn_ray_to(ray->origin());
+            // auto ray_connect = it_light->spawn_ray_to(it->p());
+            auto ray_connect = it_light->spawn_ray_to(ray->origin());
             occluded = pipeline().geometry()->intersect_any(ray_connect);
 
             // // trace shadow ray
@@ -155,12 +188,18 @@ protected:
                 beta *= eval.f;
             });
             $if(light_sample.eval.pdf > 0.0f & !occluded) {
-                Li += cs.weight * light_sample.eval.L / light_sample.eval.pdf * beta;
+                auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
+                $if (pixel[0] < 32768) {
+                    camera->film()->accumulate(pixel, shutter_weight * make_float3(1));
+                };
+                // Li += cs.weight * light_sample.eval.L / light_sample.eval.pdf * beta;
+                // auto pixel = camera->get_pixel(ray->direction(), time, offset, u_lens);
                 // Li += cs.weight * light_sample.eval.L;
             };
             $break;
         };
-        return spectrum->srgb(swl, Li);
+        return make_float3();
+        // return spectrum->srgb(swl, Li);
     }
 };
 
