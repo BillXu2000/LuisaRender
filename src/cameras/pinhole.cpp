@@ -74,9 +74,15 @@ public:
         auto data = _device_data.read(0u);
         auto p = make_float2(d / -d[2]);
         p[1] *= -1;
-        auto pixel = (p / (data.tan_half_fov / data.resolution.y) + data.resolution) / 2.0f;
         auto [filter_offset, filter_weight] = filter()->sample(u_filter);
-        return make_uint2(floor(pixel - filter_offset));
+        Float2 pixel = (p / (data.tan_half_fov / data.resolution.y) + data.resolution) / 2.0f - u_filter;
+        // return make_uint2(floor(pixel - filter_offset));
+        auto ans = def(make_uint2(32768));
+        $if (d[2] < 0 & pixel[0] >= 0 & pixel[1] >= 0 & pixel[0] < data.resolution[0] & pixel[1] < data.resolution[1]) {
+            ans = make_uint2(floor(pixel));
+        };
+        // return make_uint2(floor(pixel - u_filter));
+        return ans;
     }
 };
 
