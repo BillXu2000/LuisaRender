@@ -152,11 +152,13 @@ protected:
         // return ans;
 
 
+        auto ans = def(make_float3());
         $loop {
 
             // trace
             auto wo = -ray->direction();
             auto it = pipeline().geometry()->intersect(ray);
+            ans = it->p();
 
             // compute direct lighting
             $if(!it->shape()->has_surface()) { $break; };
@@ -168,8 +170,8 @@ protected:
             auto u_light_selection = sampler()->generate_1d();
             auto u_light_surface = sampler()->generate_2d();
             auto u_w = sampler()->generate_2d();
-            light_sample = light_sampler()->sample_ray(
-                u_light_selection, u_light_surface, u_w, swl, time);
+            light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time);
+            // light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, make_float2(pixel_id) / 2000.f, swl, time);
             auto it_light = pipeline().geometry()->intersect(light_sample.shadow_ray);
             // auto ray_connect = it_light->spawn_ray_to(it->p());
             auto ray_connect = it_light->spawn_ray_to(ray->origin());
@@ -187,7 +189,8 @@ protected:
                 auto eval = closure->evaluate(wo, wi);
                 beta *= eval.f;
             });
-            $if(light_sample.eval.pdf > 0.0f & !occluded) {
+            // $if(light_sample.eval.pdf > 0.0f & !occluded) {
+            $if(!occluded) {
                 auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
                 $if (pixel[0] < 32768) {
                     camera->film()->accumulate(pixel, shutter_weight * make_float3(1));
@@ -196,9 +199,11 @@ protected:
                 // auto pixel = camera->get_pixel(ray->direction(), time, offset, u_lens);
                 // Li += cs.weight * light_sample.eval.L;
             };
+            // camera->film()->accumulate(make_uint2(make_float2(light_sample.shadow_ray->direction() * 100.f + 200.f)), make_float3(1));
             $break;
         };
         return make_float3();
+        // return ans;
         // return spectrum->srgb(swl, Li);
     }
 };

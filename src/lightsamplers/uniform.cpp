@@ -136,8 +136,10 @@ public:
         LUISA_ASSERT(!pipeline().lights().empty(), "No lights in the scene.");
         auto it = _sample_area(Float3(), tag, u);
         auto normal = it->ng();
-        auto wi_local = sample_cosine_hemisphere(u);
+        auto wi_local = sample_cosine_hemisphere(u_w);
+        // auto wi_local = sample_cosine_hemisphere(u);
         auto wi = it->shading().local_to_world(wi_local);
+        // auto wi = -wi_local;
         auto eval = Light::Evaluation::zero(swl.dimension());
         pipeline().lights().dispatch(it->shape()->light_tag(), [&](auto light) noexcept {
             auto closure = light->closure(swl, time);
