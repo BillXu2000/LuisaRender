@@ -2,6 +2,7 @@
 // Created by Mike Smith on 2022/1/10.
 //
 
+#include "util/spec.h"
 #include <util/imageio.h>
 #include <util/sampling.h>
 #include <base/pipeline.h>
@@ -75,8 +76,10 @@ protected:
         auto importance_sampling = node<DirectLighting>()->importance_sampling();
         auto samples_lights = importance_sampling == DirectLighting::ImportanceSampling::LIGHT ||
                               importance_sampling == DirectLighting::ImportanceSampling::BOTH;
-        auto samples_surfaces = importance_sampling == DirectLighting::ImportanceSampling::SURFACE ||
-                                importance_sampling == DirectLighting::ImportanceSampling::BOTH;
+        // auto samples_surfaces = importance_sampling == DirectLighting::ImportanceSampling::SURFACE ||
+        //                         importance_sampling == DirectLighting::ImportanceSampling::BOTH;
+        auto samples_surfaces = false;
+        Float3 ans = def(float3());
 
         auto ray = cs.ray;
 
@@ -90,7 +93,7 @@ protected:
             $if(!it->valid()) {
                 if (pipeline().environment()) {
                     auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                    Li += cs.weight * eval.L;
+                    // Li += cs.weight * eval.L;
                 }
                 $break;
             };
@@ -99,7 +102,7 @@ protected:
             if (!pipeline().lights().empty()) {
                 $if(it->shape().has_light()) {
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                    Li += cs.weight * eval.L;
+                    // Li += cs.weight * eval.L;
                 };
             }
 
@@ -113,8 +116,7 @@ protected:
                 // sample one light
                 auto u_light_selection = sampler()->generate_1d();
                 auto u_light_surface = sampler()->generate_2d();
-                light_sample = light_sampler()->sample(
-                    *it, u_light_selection, u_light_surface, swl, time);
+                light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
 
                 // trace shadow ray
                 $if(light_sample.eval.pdf > 0.f &
@@ -160,6 +162,12 @@ protected:
                                 // MIS if sampling surfaces as well
                                 if (samples_surfaces) { w = balance_heuristic(light_sample.eval.pdf, eval.pdf); }
                                 Li += w * cs.weight * eval.f * light_sample.eval.L / light_sample.eval.pdf;
+                                // Li += w * cs.weight * eval.f;
+                                // Li += eval.f;
+                                // Li += light_sample.eval.L / light_sample.eval.pdf;
+                                // Li += wi;
+                                // ans = wo;
+                                // Li += SampledSpectrum(1.f);
                             };
                         };
                     }
@@ -196,13 +204,16 @@ protected:
                     $if(light_eval.pdf > 0.f & surface_sample.eval.pdf > 0.f) {
                         auto w = def(1.f);
                         if (samples_lights) { w = balance_heuristic(surface_sample.eval.pdf, light_eval.pdf); }
-                        Li += cs.weight * w * surface_sample.eval.f * light_eval.L / surface_sample.eval.pdf;
+                        // Li += cs.weight * w * surface_sample.eval.f * light_eval.L / surface_sample.eval.pdf;
                     };
                 }
                 $break;
             };
         };
+        // camera->film()->accumulate(pixel_id, spectrum->srgb(swl, Li));
         return spectrum->srgb(swl, Li);
+        // return make_float3(0);
+        // return ans;
     }
 };
 
