@@ -154,7 +154,7 @@ protected:
                         auto dist_sqr = distance_squared(it_light->p(), ray_camera->origin());
                         auto resolution = camera->film()->node()->resolution();
                         // auto camera_rate = 2 * atan(resolution.x / resolution.y * tan(camera.fo))
-                        camera->film()->accumulate(pixel, spectrum->srgb(swl, float(1 / 1.5708) * beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
+                        camera->film()->accumulate(pixel, 2 * pi * spectrum->srgb(swl, float(1 / 1.5708) * beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, eval.f));

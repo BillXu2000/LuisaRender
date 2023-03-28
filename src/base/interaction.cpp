@@ -26,7 +26,7 @@ Var<Ray> Interaction::spawn_ray_to(Expr<float3> p) const noexcept {
     auto p_from = p_robust(p - _pg);
     auto L = p - p_from;
     auto d = length(L);
-    return make_ray(p_from, L * (1.f / d), 0.f, d * .9999f);
+    return make_ray(p_from, L * (1.f / d), d * .0001f, d * .9999f);
 }
 
 }// namespace luisa::render
