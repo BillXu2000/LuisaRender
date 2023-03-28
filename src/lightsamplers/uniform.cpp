@@ -166,17 +166,32 @@ public:
                                                         const SampledWavelengths &swl,
                                                         Expr<float> time) const noexcept override {
         LUISA_ASSERT(!pipeline().lights().empty(), "No lights in the scene.");
-        auto it = _sample_area(Float3(), tag, u);
+        auto sample_light_area = [&]() {
+            auto handle = pipeline().buffer<Light::Handle>(_light_buffer_id).read(tag);
+            auto light_inst = pipeline().geometry()->instance(handle.instance_id);
+            auto light_to_world = pipeline().geometry()->instance_to_world(handle.instance_id);
+            auto alias_table_buffer_id = light_inst->alias_table_buffer_id();
+            auto [triangle_id, ux] = sample_alias_table(
+                pipeline().buffer<AliasEntry>(alias_table_buffer_id),
+                light_inst->triangle_count(), u.x);
+            auto triangle = pipeline().geometry()->triangle(*light_inst, triangle_id);
+            auto uvw = sample_uniform_triangle(make_float2(ux, u.y));
+            auto attrib = pipeline().geometry()->shading_point(*light_inst, triangle, uvw, light_to_world);
+            return luisa::make_shared<Interaction>(std::move(light_inst), handle.instance_id,
+                                                triangle_id, std::move(attrib),
+                                                false);
+        };
+        auto it = sample_light_area();
         auto normal = it->ng();
         auto wi_local = sample_cosine_hemisphere(u_w);
-        // auto wi_local = sample_cosine_hemisphere(u);
         auto wi = it->shading().local_to_world(wi_local);
-        // auto wi = -wi_local;
         auto eval = Light::Evaluation::zero(swl.dimension());
         pipeline().lights().dispatch(it->shape().light_tag(), [&](auto light) noexcept {
             auto closure = light->closure(swl, time);
             // eval = closure->evaluate(*it, it->p_shading());
-            eval = Light::Evaluation{.L = SampledSpectrum(1.f), .pdf = 1}; // TODO: light hack
+            // eval = Light::Evaluation{.L = SampledSpectrum(10.f), .pdf = 1}; // TODO: light hack
+            // eval = Light::Evaluation{.L = closure->evaluate(*it, it->p() + wi).L, .pdf = 1}; // TODO: light hack
+            eval = closure->evaluate(*it, it->p() + wi); // TODO: light hack
         });
         return {.eval = std::move(eval), .shadow_ray = it->spawn_ray(wi)};
     }
