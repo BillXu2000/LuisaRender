@@ -2,6 +2,8 @@
 // Created by Mike Smith on 2022/1/10.
 //
 
+#include "dsl/builtin.h"
+#include "util/frame.h"
 #include "util/spec.h"
 #include <util/imageio.h>
 #include <util/sampling.h>
@@ -93,7 +95,7 @@ protected:
             $if(!it->valid()) {
                 if (pipeline().environment()) {
                     auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                    // Li += cs.weight * eval.L;
+                    Li += cs.weight * eval.L;
                 }
                 $break;
             };
@@ -102,7 +104,7 @@ protected:
             if (!pipeline().lights().empty()) {
                 $if(it->shape()->has_light()) {
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                    // Li += cs.weight * eval.L;
+                    Li += cs.weight * eval.L;
                 };
             }
 
@@ -160,7 +162,15 @@ protected:
                                 auto w = def(1.f);
                                 // MIS if sampling surfaces as well
                                 if (samples_surfaces) { w = balance_heuristic(light_sample.eval.pdf, eval.pdf); }
-                                Li += w * cs.weight * eval.f * light_sample.eval.L / light_sample.eval.pdf;
+                                // Li += w * cs.weight * eval.f * light_sample.eval.L / light_sample.eval.pdf;
+                                // Li += inv_pi * dot(wi, it->ng()) * 0.1f * light_sample.eval.L / light_sample.eval.pdf;
+                                // Li += inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(/ light_sample.eval.pdf;
+                                auto it_2 = pipeline().geometry()->intersect(it->spawn_ray(wi));
+                                auto pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it->ng(), wi) * distance_squared(it->p(), it_2->p());
+                                // auto pdf = light_sample.eval.pdf;
+                                ans = inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(9, 9, 10) / pdf;
+                                // ans.x = light_sample.eval.pdf / pdf;
+
                                 // Li += w * cs.weight * eval.f;
                                 // Li += eval.f;
                                 // Li += light_sample.eval.L / light_sample.eval.pdf;
@@ -203,16 +213,14 @@ protected:
                     $if(light_eval.pdf > 0.f & surface_sample.eval.pdf > 0.f) {
                         auto w = def(1.f);
                         if (samples_lights) { w = balance_heuristic(surface_sample.eval.pdf, light_eval.pdf); }
-                        // Li += cs.weight * w * surface_sample.eval.f * light_eval.L / surface_sample.eval.pdf;
+                        Li += cs.weight * w * surface_sample.eval.f * light_eval.L / surface_sample.eval.pdf;
                     };
                 }
                 $break;
             };
         };
-        // camera->film()->accumulate(pixel_id, spectrum->srgb(swl, Li));
-        return spectrum->srgb(swl, Li);
-        // return make_float3(0);
-        // return ans;
+        // return spectrum->srgb(swl, Li);
+        return ans;
     }
 };
 

@@ -18,7 +18,7 @@ Float3 Interaction::p_robust(Expr<float3> w) const noexcept {
 }
 
 Var<Ray> Interaction::spawn_ray(Expr<float3> wi, Expr<float> t_max) const noexcept {
-    return make_ray(p_robust(wi), wi, 0.f, t_max);
+    return make_ray(p_robust(wi), wi, 0.0001f, t_max);
 }
 
 Var<Ray> Interaction::spawn_ray_to(Expr<float3> p) const noexcept {
