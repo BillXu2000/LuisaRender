@@ -149,18 +149,39 @@ protected:
                 $if(!occluded) {
                     auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
                     $if (pixel[0] < 32768) {
+                        auto dist_sqr = distance_squared(it_light->p(), ray_camera->origin());
+                        Float pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it_light->ng(), wo) * dist_sqr;
+                        Float light_1_pdf = abs_dot(it_light->ng(), wi) * inv_pi;
+                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, k_c * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
+                        Float3 measure = inv_pi * 0.1f * dot(wi, it_light->ng()) * make_float3(9, 9, 10);
+                        float pixel_area = 0.75;
+                        Float camera_dot = abs_dot(wo, normalize(make_float3(0.5, -0.5, -1)));
+                        Float camera_pdf = pixel_area * camera_dot * camera_dot * camera_dot;
+                        camera->film()->accumulate(pixel, measure / pdf / light_1_pdf / camera_pdf, 0.f);
+                            // auto pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it->ng(), wi) * distance_squared(it->p(), it_2->p());
+                            // ans = inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(9, 9, 10) / pdf;
+
+
+
+
+
+
+                        /*
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, shutter_weight * beta * eval.f));
                         // auto dist_sqr = distance_squared(light_sample.shadow_ray->origin(), it_light->p());
                         auto dist_sqr = distance_squared(it_light->p(), ray_camera->origin());
                         auto resolution = camera->film()->node()->resolution();
                         // auto camera_rate = 2 * atan(resolution.x / resolution.y * tan(camera.fo))
-                        camera->film()->accumulate(pixel, 2 * pi * spectrum->srgb(swl, float(1 / 1.5708) * beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
+                        // auto k_c = 2 * pi * float(1 / 1.5708) * beta_light * (1 / dot(-ray_connect->direction(), normalize(make_float3(0.5, -0.5, -1))));
+                        auto k_c = 2 * pi * float(1 / 1.5708) * beta_light;
+                        camera->film()->accumulate(pixel, spectrum->srgb(swl, k_c * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, eval.f));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, SampledSpectrum(1.f)));
                         // camera->film()->accumulate(pixel, spectrum->srgb(swl, light_sample.eval.L / light_sample.eval.pdf / dist_sqr));
                         // camera->film()->accumulate(pixel, wo);
+                        */
                     };
                 };
             });

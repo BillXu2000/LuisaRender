@@ -59,6 +59,12 @@ void Display::reset(CommandBuffer &command_buffer, const Film::Instance *film) n
                 constexpr auto WHITE = 11.2f;
                 x = F(1.6f * x) / F(WHITE);
             };
+            $case(luisa::to_underlying(ToneMapper::bx2k)) {
+                auto y = x * 100.f;
+                $if ((y - floor(y)).x > .95f) {
+                    x = make_float3(1);
+                };
+            };
             $default { unreachable(); };
         };
         // linear to sRGB
@@ -85,7 +91,7 @@ bool Display::update(CommandBuffer &command_buffer, uint spp) noexcept {
         auto time = _clock.toc() * 1e-3;
         ImGui::Text("Time: %.1fs", time);
         ImGui::Text("FPS: %.2f", _framerate.report());
-        static constexpr std::array tone_mapper_names{"None", "ACES", "Uncharted2"};
+        static constexpr std::array tone_mapper_names{"None", "ACES", "Uncharted2", "bx2k"};
         ImGui::Text("Tone Mapping");
         for (auto i = 0u; i < tone_mapper_names.size(); i++) {
             ImGui::SameLine();
@@ -115,7 +121,7 @@ bool Display::idle(CommandBuffer &command_buffer) noexcept {
     _window->run_one_frame([&] {
         _window->set_background(_pixels.data(), _converted.size());
         ImGui::Begin("Console", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-        static constexpr std::array tone_mapper_names{"None", "ACES", "Uncharted2"};
+        static constexpr std::array tone_mapper_names{"None", "ACES", "Uncharted2", "bx2k"};
         ImGui::Text("Tone Mapping");
         for (auto i = 0u; i < tone_mapper_names.size(); i++) {
             ImGui::SameLine();

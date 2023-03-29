@@ -21,6 +21,7 @@ public:
         NONE,
         ACES,
         UNCHARTED2,
+        bx2k,
     };
 
 private:
