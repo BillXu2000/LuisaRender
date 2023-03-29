@@ -161,6 +161,7 @@ public:
             // eval = Light::Evaluation{.L = closure->evaluate(*it, it->p() + wi).L, .pdf = 1}; // TODO: light hack
             eval = closure->evaluate(*it, it->p() + wi); // TODO: light hack
         });
+        eval.pdf *= wi_local.z * inv_pi;
         return {.eval = std::move(eval), .shadow_ray = it->spawn_ray(wi)};
     }
 };

@@ -17,16 +17,22 @@ namespace luisa::render {
 class VCM final : public ProgressiveIntegrator {
 
 private:
-    bool _remap;
-    bool _shading;
+    uint _max_depth;
+    uint _rr_depth;
+    float _rr_threshold;
 
 public:
+    uint lt_depth, debug_depth;
     VCM(Scene *scene, const SceneNodeDesc *desc) noexcept
         : ProgressiveIntegrator{scene, desc},
-          _remap{desc->property_bool_or_default("remap", true)},
-          _shading{desc->property_bool_or_default("shading", true)} {}
-    [[nodiscard]] auto remap() const noexcept { return _remap; }
-    [[nodiscard]] auto shading() const noexcept { return _shading; }
+          _max_depth{std::max(desc->property_uint_or_default("depth", 10u), 1u)},
+          _rr_depth{std::max(desc->property_uint_or_default("rr_depth", 0u), 0u)},
+          _rr_threshold{std::max(desc->property_float_or_default("rr_threshold", 0.95f), 0.05f)},
+          lt_depth{std::max(desc->property_uint_or_default("lt_depth", 5u), 0u)},
+          debug_depth{std::max(desc->property_uint_or_default("debug_depth", 0u), 0u)} {}
+    [[nodiscard]] auto max_depth() const noexcept { return _max_depth; }
+    [[nodiscard]] auto rr_depth() const noexcept { return _rr_depth; }
+    [[nodiscard]] auto rr_threshold() const noexcept { return _rr_threshold; }
     [[nodiscard]] luisa::string_view impl_type() const noexcept override { return LUISA_RENDER_PLUGIN_NAME; }
     [[nodiscard]] luisa::unique_ptr<Integrator::Instance> build(
         Pipeline &pipeline, CommandBuffer &cb) const noexcept override;
@@ -113,143 +119,96 @@ protected:
         auto cs = camera->generate_ray(pixel_id, time, u_filter, u_lens);
         auto spectrum = pipeline().spectrum();
         auto swl = spectrum->sample(spectrum->node()->is_fixed() ? 0.f : sampler()->generate_1d());
-        SampledSpectrum Li{swl.dimension(), 0.f};
-        SampledSpectrum beta_light{swl.dimension(), shutter_weight};
 
-        auto ray_camera = cs.ray;
+        auto u_light_selection = sampler()->generate_1d();
+        auto u_light_surface = sampler()->generate_2d();
+        auto u_w = sampler()->generate_2d();
+        auto light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time);
+        auto ray = light_sample.shadow_ray;
+        auto beta = light_sample.eval.L / light_sample.eval.pdf;
 
-        auto ans = def(make_float3());
-        // $if (cs.weight >= 1) {
-        //     ans[0] = 1;
-        // };
-        // $if (cs.weight < 1 & cs.weight >= 0) {
-        //     ans[1] = 1;
-        // };
-        // $if (cs.weight < 0) {
-        //     ans[2] = 1;
-        // };
-        // camera->film()->accumulate(pixel_id, ans);
-        // return float3();
+        uint n_lt = node<VCM>()->lt_depth;
+        auto v_lt = compute::ArrayFloat3<5>();
 
-        for (int i = 0; i < 1; i++) { // light ray samples
-            auto u_light_selection = sampler()->generate_1d();
-            auto u_light_surface = sampler()->generate_2d();
-            auto u_w = sampler()->generate_2d();
-            auto light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time);
-            auto it_light = pipeline().geometry()->intersect(light_sample.shadow_ray);
-            auto wi = -light_sample.shadow_ray->direction();
-            auto surface_tag = it_light->shape()->surface_tag();
-            auto ray_connect = it_light->spawn_ray_to(ray_camera->origin());
+        $for(depth, n_lt) {
+            auto it= pipeline().geometry()->intersect(ray);
+            auto wi = -ray->direction();
+
+            $if(!it->valid()) { $break; };
+            $if(!it->shape()->has_surface()) { $break; };
+
+            // light tracing sample camera
+            auto ray_connect = it->spawn_ray_to(cs.ray->origin());
+            auto surface_tag = it->shape()->surface_tag();
             auto occluded = pipeline().geometry()->intersect_any(ray_connect);
             pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
                 auto wo = ray_connect->direction();
-                auto closure = surface->closure(it_light, swl, wo, 1.f, time);
-                // auto eval = closure->evaluate(wo, wi);
+                auto closure = surface->closure(it, swl, wo, 1.f, time);
                 auto eval = closure->evaluate(wi, wo);
                 $if(!occluded) {
-                    auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
+                    Float importance;
+                    auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), Float2(), importance);
                     $if (pixel[0] < 32768) {
-                        auto dist_sqr = distance_squared(it_light->p(), ray_camera->origin());
-                        Float pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it_light->ng(), wo) * dist_sqr;
-                        Float light_1_pdf = abs_dot(it_light->ng(), wi) * inv_pi;
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, k_c * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
-                        Float3 measure = inv_pi * 0.1f * dot(wi, it_light->ng()) * make_float3(9, 9, 10);
-                        float pixel_area = 0.75;
-                        Float camera_dot = abs_dot(wo, normalize(make_float3(0.5, -0.5, -1)));
-                        Float camera_pdf = pixel_area * camera_dot * camera_dot * camera_dot;
-                        camera->film()->accumulate(pixel, measure / pdf / light_1_pdf / camera_pdf, 0.f);
-                            // auto pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it->ng(), wi) * distance_squared(it->p(), it_2->p());
-                            // ans = inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(9, 9, 10) / pdf;
-
-
-
-
-
-
-                        /*
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, shutter_weight * beta * eval.f));
-                        // auto dist_sqr = distance_squared(light_sample.shadow_ray->origin(), it_light->p());
-                        auto dist_sqr = distance_squared(it_light->p(), ray_camera->origin());
-                        auto resolution = camera->film()->node()->resolution();
-                        // auto camera_rate = 2 * atan(resolution.x / resolution.y * tan(camera.fo))
-                        // auto k_c = 2 * pi * float(1 / 1.5708) * beta_light * (1 / dot(-ray_connect->direction(), normalize(make_float3(0.5, -0.5, -1))));
-                        auto k_c = 2 * pi * float(1 / 1.5708) * beta_light;
-                        camera->film()->accumulate(pixel, spectrum->srgb(swl, k_c * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr), 0.f);
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f * light_sample.eval.L / light_sample.eval.pdf / dist_sqr));
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, beta_light * eval.f));
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, eval.f));
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, SampledSpectrum(1.f)));
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, light_sample.eval.L / light_sample.eval.pdf / dist_sqr));
-                        // camera->film()->accumulate(pixel, wo);
-                        */
+                        auto dist_sqr = distance_squared(it->p(), cs.ray->origin());
+                        $if (depth >= node<VCM>()->debug_depth) {
+                            camera->film()->accumulate(pixel, spectrum->srgb(swl, beta * eval.f * importance / dist_sqr), 0.f);
+                        };
                     };
                 };
             });
 
-        }
-        return make_float3();
-        SampledSpectrum beta{swl.dimension(), cs.weight * shutter_weight};
-
-
-        $loop {
-
-            // trace
-            auto it = pipeline().geometry()->intersect(ray_camera);
-            ans = it->p();
-
-            // compute direct lighting
-            $if(!it->shape()->has_surface()) { $break; };
-
-            auto light_sample = LightSampler::Sample::zero(swl.dimension());
-            auto occluded = def(false);
-
-            // sample one light
-            auto u_light_selection = sampler()->generate_1d();
-            auto u_light_surface = sampler()->generate_2d();
-            auto u_w = sampler()->generate_2d();
-            light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time);
-            // light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, make_float2(pixel_id) / 2000.f, swl, time);
-            auto it_light = pipeline().geometry()->intersect(light_sample.shadow_ray);
-            auto wo = -light_sample.shadow_ray->direction();
-            // auto ray_connect = it_light->spawn_ray_to(it->p());
-            auto ray_connect = it_light->spawn_ray_to(ray_camera->origin());
-            occluded = pipeline().geometry()->intersect_any(ray_connect);
-
-            // // trace shadow ray
-            // $if(light_sample.eval.pdf > 0.f &
-            //     light_sample.eval.L.any([](auto x) { return x > 0.f; })) {
-            //     occluded = pipeline().geometry()->intersect_any(light_sample.shadow_ray);
-            // };
-            auto surface_tag = it->shape()->surface_tag();
+            auto u_lobe = sampler()->generate_1d();
+            auto u_bsdf = sampler()->generate_2d();
+            // evaluate material
+            auto eta_scale = def(1.f);
             pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
-                auto closure = surface->closure(it_light, swl, wo, 1.f, time);
-                auto wi = ray_connect->direction();
-                auto eval = closure->evaluate(wo, wi);
-                $if(!occluded) {
-                    auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
-                    $if (pixel[0] < 32768) {
-                        // camera->film()->accumulate(pixel, spectrum->srgb(swl, shutter_weight * beta * eval.f));
-                        camera->film()->accumulate(pixel, spectrum->srgb(swl, eval.f));
+                // create closure
+                auto closure = surface->closure(it, swl, wi, 1.f, time);
+
+                // apply opacity map
+                auto alpha_skip = def(false);
+                if (auto o = closure->opacity()) {
+                    auto opacity = saturate(*o);
+                    alpha_skip = u_lobe >= opacity;
+                    u_lobe = ite(alpha_skip, (u_lobe - opacity) / (1.f - opacity), u_lobe / opacity);
+                }
+
+                $if(alpha_skip) {
+                    ray = it->spawn_ray(ray->direction());
+                    // pdf_bsdf = 1e16f;
+                }
+                $else {
+                    if (auto dispersive = closure->is_dispersive()) {
+                        $if(*dispersive) { swl.terminate_secondary(); };
+                    }
+                    // sample material
+                    auto surface_sample = closure->sample(wi, u_lobe, u_bsdf);
+                    ray = it->spawn_ray(surface_sample.wi);
+                    // pdf_bsdf = surface_sample.eval.pdf;
+                    auto w = ite(surface_sample.eval.pdf > 0.f, 1.f / surface_sample.eval.pdf, 0.f);
+                    beta *= w * surface_sample.eval.f;
+                    // apply eta scale
+                    auto eta = closure->eta().value_or(1.f);
+                    $switch(surface_sample.event) {
+                        $case(Surface::event_enter) { eta_scale = sqr(eta); };
+                        $case(Surface::event_exit) { eta_scale = sqr(1.f / eta); };
                     };
                 };
-                beta *= eval.f;
             });
-            // $if(light_sample.eval.pdf > 0.0f & !occluded) {
-            // $if(!occluded) {
-            //     auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), u_lens);
-            //     $if (pixel[0] < 32768) {
-            //         camera->film()->accumulate(pixel, shutter_weight * make_float3(1));
-            //     };
-                // Li += cs.weight * light_sample.eval.L / light_sample.eval.pdf * beta;
-                // auto pixel = camera->get_pixel(ray->direction(), time, offset, u_lens);
-                // Li += cs.weight * light_sample.eval.L;
-            // };
-            // camera->film()->accumulate(make_uint2(make_float2(light_sample.shadow_ray->direction() * 100.f + 200.f)), make_float3(1));
-            $break;
+            beta = zero_if_any_nan(beta);
+            $if(beta.all([](auto b) noexcept { return b <= 0.f; })) { $break; };
+
+            auto u_rr = def(0.f);
+            auto rr_depth = node<VCM>()->rr_depth();
+            $if (depth + 1u >= rr_depth) { u_rr = sampler()->generate_1d(); };
+            auto rr_threshold = node<VCM>()->rr_threshold();
+            auto q = max(beta.max() * eta_scale, .05f);
+            $if(depth + 1u >= rr_depth) {
+                $if(q < rr_threshold & u_rr >= q) { $break; };
+                beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
+            };
         };
         return make_float3();
-        // return ans;
-        // return spectrum->srgb(swl, Li);
     }
 };
 

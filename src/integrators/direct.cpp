@@ -162,13 +162,9 @@ protected:
                                 auto w = def(1.f);
                                 // MIS if sampling surfaces as well
                                 if (samples_surfaces) { w = balance_heuristic(light_sample.eval.pdf, eval.pdf); }
-                                // Li += w * cs.weight * eval.f * light_sample.eval.L / light_sample.eval.pdf;
+                                Li += w * cs.weight * eval.f * light_sample.eval.L / light_sample.eval.pdf;
                                 // Li += inv_pi * dot(wi, it->ng()) * 0.1f * light_sample.eval.L / light_sample.eval.pdf;
                                 // Li += inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(/ light_sample.eval.pdf;
-                                auto it_2 = pipeline().geometry()->intersect(it->spawn_ray(wi));
-                                auto pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it->ng(), wi) * distance_squared(it->p(), it_2->p());
-                                // auto pdf = light_sample.eval.pdf;
-                                ans = inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(9, 9, 10) / pdf;
                                 // ans.x = light_sample.eval.pdf / pdf;
 
                                 // Li += w * cs.weight * eval.f;
@@ -177,6 +173,12 @@ protected:
                                 // Li += wi;
                                 // ans = wo;
                                 // Li += SampledSpectrum(1.f);
+
+                                /* bx2k floor debug
+                                auto it_2 = pipeline().geometry()->intersect(it->spawn_ray(wi));
+                                auto pdf = Float((1.f / (2.04973f * 0.636425f) / 4.f)) / abs_dot(it->ng(), wi) * distance_squared(it->p(), it_2->p());
+                                ans = inv_pi * dot(wi, it->ng()) * 0.1f * make_float3(9, 9, 10) / pdf;
+                                */
                             };
                         };
                     }
@@ -219,8 +221,7 @@ protected:
                 $break;
             };
         };
-        // return spectrum->srgb(swl, Li);
-        return ans;
+        return spectrum->srgb(swl, Li);
     }
 };
 
