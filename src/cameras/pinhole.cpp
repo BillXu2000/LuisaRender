@@ -67,7 +67,7 @@ public:
     }
 
     [[nodiscard]] Expr<uint2> get_pixel(Expr<float3> direction, Expr<float> time,
-                                        Expr<float2> u_filter, Expr<float2> u_lens) const noexcept override {
+                                        Expr<float2> u_filter, Expr<float2> u_lens, Float &importance) const noexcept override {
         // bx2k todo: hack pinhole
         auto c2w = camera_to_world();
         auto d = inverse(make_float3x3(c2w)) * direction;
@@ -81,6 +81,9 @@ public:
         $if (d[2] < 0 & pixel[0] >= 0 & pixel[1] >= 0 & pixel[0] < data.resolution[0] & pixel[1] < data.resolution[1]) {
             ans = make_uint2(floor(pixel));
         };
+        Float camera_dot = abs(normalize(d).z);
+        Float pixel_area = sqr(2 * data.tan_half_fov) * data.resolution.x / data.resolution.y;
+        importance = 1.f / (pixel_area * camera_dot * camera_dot * camera_dot);
         // return make_uint2(floor(pixel - u_filter));
         return ans;
     }

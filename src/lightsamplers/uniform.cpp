@@ -170,13 +170,13 @@ public:
             auto handle = pipeline().buffer<Light::Handle>(_light_buffer_id).read(tag);
             auto light_inst = pipeline().geometry()->instance(handle.instance_id);
             auto light_to_world = pipeline().geometry()->instance_to_world(handle.instance_id);
-            auto alias_table_buffer_id = light_inst->alias_table_buffer_id();
+            auto alias_table_buffer_id = light_inst.alias_table_buffer_id();
             auto [triangle_id, ux] = sample_alias_table(
                 pipeline().buffer<AliasEntry>(alias_table_buffer_id),
-                light_inst->triangle_count(), u.x);
-            auto triangle = pipeline().geometry()->triangle(*light_inst, triangle_id);
+                light_inst.triangle_count(), u.x);
+            auto triangle = pipeline().geometry()->triangle(light_inst, triangle_id);
             auto uvw = sample_uniform_triangle(make_float2(ux, u.y));
-            auto attrib = pipeline().geometry()->shading_point(*light_inst, triangle, uvw, light_to_world);
+            auto attrib = pipeline().geometry()->shading_point(light_inst, triangle, uvw, light_to_world);
             return luisa::make_shared<Interaction>(std::move(light_inst), handle.instance_id,
                                                 triangle_id, std::move(attrib),
                                                 false);
@@ -193,6 +193,7 @@ public:
             // eval = Light::Evaluation{.L = closure->evaluate(*it, it->p() + wi).L, .pdf = 1}; // TODO: light hack
             eval = closure->evaluate(*it, it->p() + wi); // TODO: light hack
         });
+        eval.pdf *= wi_local.z * inv_pi;
         return {.eval = std::move(eval), .shadow_ray = it->spawn_ray(wi)};
     }
 };
