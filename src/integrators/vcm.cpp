@@ -142,7 +142,8 @@ protected:
         uint n_lt = node<VCM>()->lt_depth;
         Float pd_l = inv_pi;
         Float p_w = 1;
-        // p_w /= pd_l;
+        Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
+        p_w /= pd_l;
 
         $for(depth, n_lt) {
             auto it= pipeline().geometry()->intersect(ray);
@@ -151,7 +152,7 @@ protected:
             $if(!it->shape().has_surface()) { $break; };
 
             $if (depth == 0) {
-                // p_w /= (cos_light * abs_dot(it->ng(), wi) / distance_squared(ray->origin(), it->p())); // G
+                p_w /= (cos_light * abs_dot(it->ng(), wi) / distance_squared(ray->origin(), it->p())); // G
             };
             // light tracing sample camera
             auto ray_connect = it->spawn_ray_to(cs.ray->origin());
@@ -167,13 +168,14 @@ protected:
                     $if (pixel[0] < 32768) {
                         auto dist_sqr = distance_squared(it->p(), cs.ray->origin());
                         $if (depth >= node<VCM>()->debug_depth) {
-                            Float cos_eye = abs_dot(wo, make_float3(0, 1, 0)); // todo: bx2k hack
-                            // p_w *= (abs_dot(it->ng(), wo) * cos_eye / dist_sqr); // G
-                            // p_w *= importance; // p_1
+                            Float cos_eye = abs_dot(wo, camera_normal); // todo: bx2k hack
+                            Float p_w_tmp = 1.f;
+                            p_w_tmp *= (abs_dot(it->ng(), wo) * cos_eye / dist_sqr); // G
+                            p_w_tmp *= importance; // p_1
                             $if (depth > 0) {
-                                p_w *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
+                                p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
                             };
-                            Float sqr_heuristic = 1 / (1 + sqr(p_w));
+                            Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
                             camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                         };
                     };
@@ -257,7 +259,7 @@ protected:
         {
             Float importance;
             auto pixel = camera->get_pixel(camera_ray->direction(), time, make_float2(), Float2(), importance);
-            // p_w = 1 / (importance * cos_eye);
+            p_w = 1 / importance;
         }
 
         auto ray = camera_ray;
@@ -284,7 +286,7 @@ protected:
             $if(!it->shape()->has_surface()) { $break; };
 
             $if (depth == 0) {
-                // p_w /= (cos_eye * abs_dot(it->ng(), ray->direction()) / distance_squared(ray->origin(), it->p())); // G
+                p_w /= (cos_eye * abs_dot(it->ng(), ray->direction()) / distance_squared(ray->origin(), it->p())); // G
             };
 
             // generate uniform samples
@@ -299,7 +301,7 @@ protected:
             // sample one light
             auto light_sample = light_sampler()->sample(
                 *it, u_light_selection, u_light_surface, swl, time);
-            Float dist_sqr = light_sample.shadow_ray->t_max();
+            // Float dist_sqr = light_sample.shadow_ray->t_max();
 
             // trace shadow ray
             auto occluded = pipeline().geometry()->intersect_any(light_sample.shadow_ray);
@@ -334,13 +336,15 @@ protected:
                         auto w = 1 / light_sample.eval.pdf;
                         Float cos_light = abs(wi.y); // hack
                         Float pd_l = inv_pi;
-                        // p_w *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
-                        // p_w *= pd_l;
+                        auto it_tmp = pipeline().geometry()->intersect(it->spawn_ray(wi));
+                        Float dist_sqr = compute::distance_squared(it->p(), it_tmp->p());
+                        Float p_w_tmp = 1.f;
+                        p_w_tmp *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
+                        p_w_tmp *= pd_l;
                         $if (depth > 0) {
-                            p_w *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
+                            p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                         };
-                        Float sqr_heuristic = 1 / (1 + sqr(p_w));
-                        // Float sqr_heuristic = 1;
+                        Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
                         Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                     };
                     // sample material
@@ -349,6 +353,10 @@ protected:
                     pdf_bsdf = surface_sample.eval.pdf;
                     auto w = ite(surface_sample.eval.pdf > 0.f, 1.f / surface_sample.eval.pdf, 0.f);
                     beta *= w * surface_sample.eval.f;
+                    p_w /= (pdf_bsdf / abs_dot(surface_sample.wi, it->ng()));
+                    $if (depth > 0) {
+                        p_w *= closure->evaluate(surface_sample.wi, wo).pdf / abs_dot(it->ng(), wo);
+                    };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
                     $switch(surface_sample.event) {
