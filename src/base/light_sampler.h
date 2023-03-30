@@ -83,10 +83,10 @@ public:
             const SampledWavelengths &swl, Expr<float> time) const noexcept;
         [[nodiscard]] virtual Sample sample_ray(
             Expr<float> u_sel, Expr<float2> u_light, Expr<float2> u_w,
-            const SampledWavelengths &swl, Expr<float> time) const noexcept;
+            const SampledWavelengths &swl, Expr<float> time, Float &cos_light) const noexcept;
         [[nodiscard]] virtual LightSampler::Sample sample_light_ray( Expr<uint> tag, Expr<float2> u, Expr<float2> u_w,
                                                           const SampledWavelengths &swl,
-                                                          Expr<float> time) const noexcept = 0;
+                                                          Expr<float> time, Float &cos_light) const noexcept = 0;
     };
 
 public:

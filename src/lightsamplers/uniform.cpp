@@ -132,7 +132,7 @@ private:
 public:
     [[nodiscard]] LightSampler::Sample sample_light_ray( Expr<uint> tag, Expr<float2> u, Expr<float2> u_w,
                                                         const SampledWavelengths &swl,
-                                                        Expr<float> time) const noexcept override {
+                                                        Expr<float> time, Float &cos_light) const noexcept override {
         LUISA_ASSERT(!pipeline().lights().empty(), "No lights in the scene.");
         auto sample_light_area = [&]() {
             auto handle = pipeline().buffer<Light::Handle>(_light_buffer_id).read(tag);
@@ -161,6 +161,7 @@ public:
             // eval = Light::Evaluation{.L = closure->evaluate(*it, it->p() + wi).L, .pdf = 1}; // TODO: light hack
             eval = closure->evaluate(*it, it->p() + wi); // TODO: light hack
         });
+        cos_light = wi_local.z;
         eval.pdf *= wi_local.z * inv_pi;
         return {.eval = std::move(eval), .shadow_ray = it->spawn_ray(wi)};
     }

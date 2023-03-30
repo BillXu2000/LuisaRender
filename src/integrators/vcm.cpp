@@ -1,4 +1,5 @@
 #include "core/basic_types.h"
+#include "dsl/builtin.h"
 #include "util/spec.h"
 #include <util/rng.h>
 #include <base/pipeline.h>
@@ -123,20 +124,26 @@ protected:
         auto u_light_selection = sampler()->generate_1d();
         auto u_light_surface = sampler()->generate_2d();
         auto u_w = sampler()->generate_2d();
-        auto light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time);
+        Float cos_light;
+        auto light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time, cos_light);
         auto ray = light_sample.shadow_ray;
         auto beta = light_sample.eval.L / light_sample.eval.pdf;
 
         uint n_lt = node<VCM>()->lt_depth;
         auto v_lt = compute::ArrayFloat3<5>();
+        Float pd_last = light_sample.eval.pdf / cos_light;
+        Float p_w = 1.f;
 
         $for(depth, n_lt) {
             auto it= pipeline().geometry()->intersect(ray);
             auto wi = -ray->direction();
-
+            p_w /= pd_last; // pd under
             $if(!it->valid()) { $break; };
             $if(!it->shape()->has_surface()) { $break; };
 
+            $if (depth == 0) {
+                p_w /= (cos_light * abs_dot(it->ng(), ray->direction()) / distance_squared(ray->origin(), it->p())); // G
+            };
             // light tracing sample camera
             auto ray_connect = it->spawn_ray_to(cs.ray->origin());
             auto surface_tag = it->shape()->surface_tag();
@@ -151,7 +158,14 @@ protected:
                     $if (pixel[0] < 32768) {
                         auto dist_sqr = distance_squared(it->p(), cs.ray->origin());
                         $if (depth >= node<VCM>()->debug_depth) {
-                            camera->film()->accumulate(pixel, spectrum->srgb(swl, beta * eval.f * importance / dist_sqr), 0.f);
+                            Float cos_light = 1.f; // todo: bx2k hack
+                            p_w *= (abs_dot(it->ng(), wo) * cos_light / dist_sqr); // G
+                            p_w *= (1 / (importance)); // p_1
+                            $if (depth > 0) {
+                                p_w *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
+                            };
+                            Float sqr_heuristic = 1 / (1 + sqr(p_w));
+                            camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                         };
                     };
                 };
@@ -192,6 +206,9 @@ protected:
                     $switch(surface_sample.event) {
                         $case(Surface::event_enter) { eta_scale = sqr(eta); };
                         $case(Surface::event_exit) { eta_scale = sqr(1.f / eta); };
+                    };
+                    $if (depth > 0) {
+                        p_w *= closure->evaluate(surface_sample.wi, wi).pdf / abs_dot(it->ng(), wi);
                     };
                 };
             });
