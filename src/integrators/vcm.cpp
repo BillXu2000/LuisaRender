@@ -66,6 +66,7 @@ protected:
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
             auto L = Li_vcm(camera, frame_index, pixel_id, time, shutter_weight);
+            camera->film()->accumulate(pixel_id, make_float3());
         };
 
         Kernel2D render_kernel_rt = [&](UInt frame_index, Float time, Float shutter_weight) noexcept {
@@ -93,8 +94,7 @@ protected:
         for (auto s : shutter_samples) {
             pipeline().update(command_buffer, s.point.time);
             for (auto i = 0u; i < s.spp; i++) {
-                command_buffer << render(sample_id++, s.point.time, s.point.weight)
-                                    .dispatch(resolution);
+                // command_buffer << render(sample_id++, s.point.time, s.point.weight) .dispatch(resolution);
                 command_buffer << render_rt(sample_id++, s.point.time, s.point.weight) .dispatch(resolution);
                 auto dispatches_per_commit =
                     display()->should_close() ?
@@ -175,7 +175,8 @@ protected:
                             $if (depth > 0) {
                                 p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
                             };
-                            Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                            // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                            Float sqr_heuristic = 1;
                             camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                         };
                     };
@@ -344,7 +345,8 @@ protected:
                         $if (depth > 0) {
                             p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                         };
-                        Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                        // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                        Float sqr_heuristic = 1;
                         Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                     };
                     // sample material

@@ -13,7 +13,7 @@ namespace luisa::render {
 Display::Display(luisa::string name) noexcept
     : _name{std::move(name)},
       _tone_mapper{ToneMapper::UNCHARTED2},
-      _exposure{0.f} {}
+      _exposure{2.f} {}
 
 void Display::reset(CommandBuffer &command_buffer, const Film::Instance *film) noexcept {
     using namespace luisa::compute;
@@ -84,6 +84,8 @@ bool Display::update(CommandBuffer &command_buffer, uint spp) noexcept {
                    << compute::synchronize();
     _framerate.record(spp - _last_spp);
     _last_spp = spp;
+    save_image(luisa::format("dump-{}spp-{:.3f}s.png", spp, _clock.toc() * 1e-3),
+                       _pixels.data()->data(), _converted.size());
     _window->run_one_frame([&] {
         _window->set_background(_pixels.data(), _converted.size());
         ImGui::Begin("Console", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
@@ -104,6 +106,8 @@ bool Display::update(CommandBuffer &command_buffer, uint spp) noexcept {
             save_image(luisa::format("dump-{}spp-{:.3f}s.png", spp, _clock.toc() * 1e-3),
                        _pixels.data()->data(), _converted.size());
         }
+        save_image(luisa::format("dump-{}spp-{:.3f}s.bmp", spp, _clock.toc() * 1e-3),
+                    _pixels.data()->data(), _converted.size());
         ImGui::End();
     });
     return true;
