@@ -24,12 +24,15 @@ private:
     float _rr_threshold;
 
 public:
+    bool enable_lt, enable_rt;
     uint lt_depth, debug_depth;
     VCM(Scene *scene, const SceneNodeDesc *desc) noexcept
         : ProgressiveIntegrator{scene, desc},
           _max_depth{std::max(desc->property_uint_or_default("depth", 10u), 1u)},
           _rr_depth{std::max(desc->property_uint_or_default("rr_depth", 0u), 0u)},
           _rr_threshold{std::max(desc->property_float_or_default("rr_threshold", 0.95f), 0.05f)},
+          enable_lt{desc->property_bool_or_default("enable_lt", true)},
+          enable_rt{desc->property_bool_or_default("enable_rt", true)},
           lt_depth{std::max(desc->property_uint_or_default("lt_depth", 5u), 0u)},
           debug_depth{std::max(desc->property_uint_or_default("debug_depth", 0u), 0u)} {}
     [[nodiscard]] auto max_depth() const noexcept { return _max_depth; }
@@ -61,19 +64,27 @@ protected:
             resolution.x, resolution.y, spp);
 
         using namespace luisa::compute;
+        bool enable_lt = node<VCM>()->enable_lt;
+        bool enable_rt = node<VCM>()->enable_rt;
 
         Kernel2D render_kernel = [&](UInt frame_index, Float time, Float shutter_weight) noexcept {
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
-            auto L = Li_vcm(camera, frame_index, pixel_id, time, shutter_weight);
+            if (enable_lt) {
+                auto L = Li_vcm(camera, frame_index, pixel_id, time, shutter_weight);
+            }
         };
 
         Kernel2D render_kernel_rt = [&](UInt frame_index, Float time, Float shutter_weight) noexcept {
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
-            auto L = Li_vcm_rt(camera, frame_index, pixel_id, time);
-            camera->film()->accumulate(pixel_id, L);
-            // camera->film()->accumulate(pixel_id, make_float3());
+            if (enable_rt) {
+                auto L = Li_vcm_rt(camera, frame_index, pixel_id, time);
+                camera->film()->accumulate(pixel_id, L);
+            }
+            else {
+                camera->film()->accumulate(pixel_id, make_float3());
+            }
         };
 
         Clock clock_compile;
@@ -93,14 +104,14 @@ protected:
         for (auto s : shutter_samples) {
             pipeline().update(command_buffer, s.point.time);
             for (auto i = 0u; i < s.spp; i++) {
-                command_buffer << render(sample_id++, s.point.time, s.point.weight)
-                                    .dispatch(resolution);
-                command_buffer << render_rt(sample_id++, s.point.time, s.point.weight) .dispatch(resolution);
+                command_buffer << render(sample_id, s.point.time, s.point.weight).dispatch(resolution);
+                command_buffer << render_rt(sample_id, s.point.time, s.point.weight).dispatch(resolution);
+                sample_id++;
                 auto dispatches_per_commit =
                     display()->should_close() ?
                         node<ProgressiveIntegrator>()->display_interval() :
-                        32u;
-                if (++dispatch_count % dispatches_per_commit == 0u) [[unlikely]] {
+                        1u;
+                if (++dispatch_count % dispatches_per_commit == 0u) [[likely]] {
                     dispatch_count = 0u;
                     auto p = sample_id / static_cast<double>(spp);
                     if (display()->update(command_buffer, sample_id)) {
@@ -130,9 +141,11 @@ protected:
         auto cs = camera->generate_ray(pixel_id, time, u_filter, u_lens);
         auto spectrum = pipeline().spectrum();
         auto swl = spectrum->sample(spectrum->node()->is_fixed() ? 0.f : sampler()->generate_1d());
+        auto resolution = camera->film()->node()->resolution();
 
         auto u_light_selection = sampler()->generate_1d();
-        auto u_light_surface = sampler()->generate_2d();
+        // auto u_light_surface = sampler()->generate_2d();
+        auto u_light_surface = make_float2(Float(pixel_id.x) / resolution.x, Float(pixel_id.y) / resolution.y);
         auto u_w = sampler()->generate_2d();
         Float cos_light;
         auto light_sample = light_sampler()->sample_ray(u_light_selection, u_light_surface, u_w, swl, time, cos_light);
