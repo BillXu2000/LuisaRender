@@ -213,7 +213,6 @@ protected:
 
                 $if(alpha_skip) {
                     ray = it->spawn_ray(ray->direction());
-                    // pdf_bsdf = 1e16f;
                 }
                 $else {
                     if (auto dispersive = closure->is_dispersive()) {
@@ -222,7 +221,6 @@ protected:
                     // sample material
                     auto surface_sample = closure->sample(wi, u_lobe, u_bsdf);
                     ray = it->spawn_ray(surface_sample.wi);
-                    // pdf_bsdf = surface_sample.eval.pdf;
                     auto w = ite(surface_sample.eval.pdf > 0.f, 1.f / surface_sample.eval.pdf, 0.f);
                     beta *= w * surface_sample.eval.f;
                     // apply eta scale
@@ -358,6 +356,8 @@ protected:
                             p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                         };
                         Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                        bool enable_lt = node<VCM>()->enable_lt;
+                        if (!enable_lt) sqr_heuristic = 1;
                         Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                     };
                     // sample material
