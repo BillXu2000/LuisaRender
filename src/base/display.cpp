@@ -82,9 +82,6 @@ bool Display::update(CommandBuffer &command_buffer, uint spp) noexcept {
                           .dispatch(_pixels.size())
                    << _converted.copy_to(_pixels.data())
                    << compute::synchronize();
-    if (_last_spp < 128 && spp >= 128) {
-      save_image(luisa::format("dump-{}spp-{:.3f}s.png", spp, _clock.toc() * 1e-3), _pixels.data()->data(), _converted.size());
-    }
     _framerate.record(spp - _last_spp);
     _last_spp = spp;
     _window->run_one_frame([&] {
