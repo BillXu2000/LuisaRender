@@ -19,6 +19,7 @@ namespace luisa::render {
 class VCM final : public ProgressiveIntegrator {
 
 private:
+    // bool _display;
     uint _max_depth;
     uint _rr_depth;
     float _rr_threshold;
@@ -28,6 +29,7 @@ public:
     uint lt_depth, debug_depth;
     VCM(Scene *scene, const SceneNodeDesc *desc) noexcept
         : ProgressiveIntegrator{scene, desc},
+        //   _display{desc->property_bool_or_default("display")},
           _max_depth{std::max(desc->property_uint_or_default("depth", 10u), 1u)},
           _rr_depth{std::max(desc->property_uint_or_default("rr_depth", 0u), 0u)},
           _rr_threshold{std::max(desc->property_float_or_default("rr_threshold", 0.95f), 0.05f)},
@@ -108,13 +110,13 @@ protected:
                 command_buffer << render_rt(sample_id, s.point.time, s.point.weight).dispatch(resolution);
                 sample_id++;
                 auto dispatches_per_commit =
-                    display()->should_close() ?
+                    display() && display()->should_close() ?
                         node<ProgressiveIntegrator>()->display_interval() :
                         1u;
                 if (++dispatch_count % dispatches_per_commit == 0u) [[likely]] {
                     dispatch_count = 0u;
                     auto p = sample_id / static_cast<double>(spp);
-                    if (display()->update(command_buffer, sample_id)) {
+                    if (display() && display()->update(command_buffer, sample_id)) {
                         progress.update(p);
                     } else {
                         command_buffer << [&progress, p] { progress.update(p); };
@@ -154,9 +156,10 @@ protected:
 
         uint n_lt = node<VCM>()->lt_depth;
         Float pd_l = inv_pi;
-        Float p_w = 1;
+        // Float p_w = 1;
+        Float p_1 = 1;
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
-        p_w /= pd_l;
+        // p_w /= pd_l;
 
         $for(depth, n_lt) {
             auto it= pipeline().geometry()->intersect(ray);
@@ -165,35 +168,41 @@ protected:
             $if(!it->shape().has_surface()) { $break; };
 
             $if (depth == 0) {
-                p_w /= (cos_light * abs_dot(it->ng(), wi) / distance_squared(ray->origin(), it->p())); // G
+                auto dist = distance_squared(ray->origin(), it->p());
+                // p_w /= (cos_light * abs_dot(it->ng(), wi) / dist); // G
             };
             // light tracing sample camera
             auto ray_connect = it->spawn_ray_to(cs.ray->origin());
             auto surface_tag = it->shape().surface_tag();
             auto occluded = pipeline().geometry()->intersect_any(ray_connect);
-            pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
-                auto wo = ray_connect->direction();
-                auto closure = surface->closure(it, swl, wo, 1.f, time);
-                auto eval = closure->evaluate(wi, wo);
-                $if(!occluded) {
-                    Float importance;
-                    auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), Float2(), importance);
-                    $if (pixel[0] < 32768) {
-                        auto dist_sqr = distance_squared(it->p(), cs.ray->origin());
-                        $if (depth >= node<VCM>()->debug_depth) {
-                            Float cos_eye = abs_dot(wo, camera_normal); // todo: bx2k hack
-                            Float p_w_tmp = 1.f;
-                            p_w_tmp *= (abs_dot(it->ng(), wo) * cos_eye / dist_sqr); // G
-                            p_w_tmp *= importance; // p_1
-                            $if (depth > 0) {
-                                p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
+            $if (depth > 0) {
+                pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
+                    auto wo = ray_connect->direction();
+                    auto closure = surface->closure(it, swl, wo, 1.f, time);
+                    auto eval = closure->evaluate(wi, wo);
+                    $if(!occluded) {
+                        Float importance;
+                        auto pixel = camera->get_pixel(-ray_connect->direction(), time, make_float2(), Float2(), importance);
+                        $if (pixel[0] < 32768) {
+                            auto dist_sqr = distance_squared(it->p(), cs.ray->origin());
+                            $if (depth >= node<VCM>()->debug_depth) {
+                                Float cos_eye = abs_dot(wo, camera_normal); // todo: bx2k hack
+                                // Float p_w_tmp = 1.f;
+                                // p_w_tmp *= (abs_dot(it->ng(), wo) * cos_eye / dist_sqr); // G
+                                // p_w_tmp *= importance; // p_1
+                                // $if (depth > 0) {
+                                //     p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
+                                // };
+                                // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
+                                Float p_i = 1.0f;
+                                // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                                Float sqr_heuristic = p_i / (p_i + p_1);
+                                camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
-                            Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                            camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                         };
                     };
-                };
-            });
+                });
+            };
 
             auto u_lobe = sampler()->generate_1d();
             auto u_bsdf = sampler()->generate_2d();
@@ -229,9 +238,15 @@ protected:
                         $case(Surface::event_enter) { eta_scale = sqr(eta); };
                         $case(Surface::event_exit) { eta_scale = sqr(1.f / eta); };
                     };
-                    p_w /= (surface_sample.eval.pdf / abs_dot(it->ng(), surface_sample.wi));
-                    $if (depth > 0) {
-                        p_w *= closure->evaluate(surface_sample.wi, wi).pdf / abs_dot(it->ng(), wi);
+                    // p_w /= (surface_sample.eval.pdf / abs_dot(it->ng(), surface_sample.wi));
+                    // $if (depth > 0) {
+                    //     p_w *= closure->evaluate(surface_sample.wi, wi).pdf / abs_dot(it->ng(), wi);
+                    // };
+                    $if (depth == 0) {
+                        auto dist = distance_squared(light_sample.shadow_ray->origin(), it->p());
+                        // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf / light_sample.eval.pdf;
+                        // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf;
+                        p_1 = dist;
                     };
                 };
             });
@@ -265,15 +280,17 @@ protected:
 
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
 
-        Float p_w = 1;
+        // Float p_w = 1;
+        Float p_k = 0;
+        Float camera_importance;
         Float cos_eye = abs_dot(camera_ray->direction(), camera_normal); // todo: bx2k hack
         {
-            Float importance;
-            auto pixel = camera->get_pixel(camera_ray->direction(), time, make_float2(), Float2(), importance);
-            p_w = 1 / importance;
+            auto pixel = camera->get_pixel(camera_ray->direction(), time, make_float2(), Float2(), camera_importance);
+            // p_w = 1 / importance;
         }
 
         auto ray = camera_ray;
+        auto hack_camera_ray = camera_ray;
         auto pdf_bsdf = def(1e16f);
         $for(depth, node<VCM>()->max_depth()) {
 
@@ -296,9 +313,9 @@ protected:
 
             $if(!it->shape().has_surface()) { $break; };
 
-            $if (depth == 0) {
-                p_w /= (cos_eye * abs_dot(it->ng(), ray->direction()) / distance_squared(ray->origin(), it->p())); // G
-            };
+            // $if (depth == 0) {
+                // p_w /= (cos_eye * abs_dot(it->ng(), ray->direction()) / distance_squared(ray->origin(), it->p())); // G
+            // };
 
             // generate uniform samples
             auto u_light_selection = sampler()->generate_1d();
@@ -349,13 +366,17 @@ protected:
                         Float pd_l = inv_pi;
                         auto it_tmp = pipeline().geometry()->intersect(it->spawn_ray(wi));
                         Float dist_sqr = compute::distance_squared(it->p(), it_tmp->p());
-                        Float p_w_tmp = 1.f;
-                        p_w_tmp *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
-                        p_w_tmp *= pd_l;
-                        $if (depth > 0) {
-                            p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
-                        };
-                        Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                        // Float p_w_tmp = 1.f;
+                        // p_w_tmp *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
+                        // p_w_tmp *= pd_l;
+                        // $if (depth > 0) {
+                        //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
+                        // };
+                        // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
+                        // Float p_i = dist_sqr / eval.pdf;
+                        Float p_i = dist_sqr;
+                        // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                        Float sqr_heuristic = p_i / (p_i + p_k);
                         bool enable_lt = node<VCM>()->enable_lt;
                         if (!enable_lt) sqr_heuristic = 1;
                         Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
@@ -366,9 +387,13 @@ protected:
                     pdf_bsdf = surface_sample.eval.pdf;
                     auto w = ite(surface_sample.eval.pdf > 0.f, 1.f / surface_sample.eval.pdf, 0.f);
                     beta *= w * surface_sample.eval.f;
-                    p_w /= (pdf_bsdf / abs_dot(surface_sample.wi, it->ng()));
-                    $if (depth > 0) {
-                        p_w *= closure->evaluate(surface_sample.wi, wo).pdf / abs_dot(it->ng(), wo);
+                    // p_w /= (pdf_bsdf / abs_dot(surface_sample.wi, it->ng()));
+                    // $if (depth > 0) {
+                    //     p_w *= closure->evaluate(surface_sample.wi, wo).pdf / abs_dot(it->ng(), wo);
+                    // };
+                    $if (depth == 0) {
+                        // p_k = distance_squared(hack_camera_ray->origin(), it->p()) / closure->evaluate(surface_sample.wi, wo).pdf / camera_importance;
+                        p_k = 1;
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
