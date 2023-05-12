@@ -194,10 +194,10 @@ protected:
                                 //     p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
                                 // };
                                 // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
-                                Float p_i = 1.0f;
+                                Float p_k = 1.0f / (eval.pdf);
                                 // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                                Float sqr_heuristic = p_i / (p_i + p_1);
-                                camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
+                                Float sqr_heuristic = p_k / (p_k + p_1);
+                                // camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
                         };
                     };
@@ -246,7 +246,8 @@ protected:
                         auto dist = distance_squared(light_sample.shadow_ray->origin(), it->p());
                         // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf / light_sample.eval.pdf;
                         // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf;
-                        p_1 = dist;
+                        // p_1 = dist;
+                        p_1 = 1 / closure->evaluate(surface_sample.wi, wi).pdf;
                     };
                 };
             });
@@ -277,6 +278,8 @@ protected:
         auto swl = spectrum->sample(spectrum->node()->is_fixed() ? 0.f : sampler()->generate_1d());
         SampledSpectrum beta{swl.dimension(), camera_weight};
         SampledSpectrum Li{swl.dimension()};
+        SampledSpectrum Li_3{swl.dimension()};
+        SampledSpectrum Li_4{swl.dimension()};
 
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
 
@@ -292,6 +295,7 @@ protected:
         auto ray = camera_ray;
         auto hack_camera_ray = camera_ray;
         auto pdf_bsdf = def(1e16f);
+        Float3 ans_debug = make_float3();
         $for(depth, node<VCM>()->max_depth()) {
 
             // trace
@@ -374,12 +378,39 @@ protected:
                         // };
                         // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
                         // Float p_i = dist_sqr / eval.pdf;
-                        Float p_i = dist_sqr;
+                        // Float p_i = dist_sqr;
+                        Float p_1 = 1 / eval.pdf;
+                        // Float p_1 = 1;
                         // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                        Float sqr_heuristic = p_i / (p_i + p_k);
+                        Float sqr_heuristic = p_1 / (p_1 + p_k);
                         bool enable_lt = node<VCM>()->enable_lt;
                         if (!enable_lt) sqr_heuristic = 1;
-                        Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        Float3 delta = spectrum->srgb(swl, sqr_heuristic * w * beta * eval.f * light_sample.eval.L);
+                        // Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        // $if (p_1 < 0) {
+                        //     ans_debug.x += 1;
+                        // };
+                        // $if (p_k < 0) {
+                        //     ans_debug.y += 1;
+                        // };
+                        // $if (delta < 0) {
+                        //     ans_debug.z += 1;
+                        // };
+                        for (int k = 0; k < 3; k++) {
+                            $if (delta[k] < 0) {
+                                ans_debug[k] += 1;
+                            };
+                        }
+                        $if (depth >= 4 & depth < 5) {
+                            // Li += sqr_heuristic;
+                            Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        };
+                        // $if (depth == 3) {
+                        //     Li_3 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        // };
+                        // $if (depth == 4) {
+                        //     Li_4 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        // };
                     };
                     // sample material
                     auto surface_sample = closure->sample(wo, u_lobe, u_bsdf);
@@ -393,7 +424,7 @@ protected:
                     // };
                     $if (depth == 0) {
                         // p_k = distance_squared(hack_camera_ray->origin(), it->p()) / closure->evaluate(surface_sample.wi, wo).pdf / camera_importance;
-                        p_k = 1;
+                        p_k = 1.0f / (closure->evaluate(surface_sample.wi, wo).pdf);
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
@@ -412,7 +443,11 @@ protected:
                 beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
             };
         };
-        return spectrum->srgb(swl, Li);
+        // return spectrum->srgb(swl, Li);
+        Float3 ans_3 = spectrum->srgb(swl, Li_3);
+        Float3 ans_4 = spectrum->srgb(swl, Li_4);
+        Float3 ans = spectrum->srgb(swl, Li);
+        return make_float3(ans_3.x, ans_4.y, ans.z);
     }
 };
 
