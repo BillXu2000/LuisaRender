@@ -405,9 +405,9 @@ protected:
                             // Li += sqr_heuristic;
                             Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                         };
-                        // $if (depth == 3) {
-                        //     Li_3 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
-                        // };
+                        $if (depth == 3) {
+                            Li_3 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        };
                         // $if (depth == 4) {
                         //     Li_4 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                         // };
@@ -445,9 +445,10 @@ protected:
         };
         // return spectrum->srgb(swl, Li);
         Float3 ans_3 = spectrum->srgb(swl, Li_3);
-        Float3 ans_4 = spectrum->srgb(swl, Li_4);
+        // Float3 ans_4 = spectrum->srgb(swl, Li_4);
         Float3 ans = spectrum->srgb(swl, Li);
-        return make_float3(ans_3.x, ans_4.y, ans.z);
+        // return make_float3(ans_3.x, 0.f, ans.z);
+        return make_float3(0.f, 0.f, ans.z);
     }
 };
 
