@@ -12,7 +12,7 @@
 
 namespace {
     float fov_area;
-    float a_pk = .0;
+    float a_pk = 1;
 }
 
 namespace luisa::render {
@@ -300,7 +300,7 @@ protected:
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
 
         // Float p_w = 1;
-        Float p_k = 0;
+        Float p_k = 0, p_k_next;
         Float camera_importance;
         Float cos_eye = abs_dot(camera_ray->direction(), camera_normal); // todo: bx2k hack
         {
@@ -328,12 +328,17 @@ protected:
             if (!pipeline().lights().empty()) {
                 $if(it->shape().has_light()) {
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                    Float p_0 = inv_r(eval.pdf);
-                    Float p_1 = inv_r(pdf_bsdf);
+                    Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
+                    Float p_0 = dist_sqr * inv_r(eval.pdf);
+                    Float p_1 = dist_sqr * inv_r(pdf_bsdf);
                     Float w_heuristic = p_0 * inv_r(p_0 + p_1 + p_k);
                     Li += beta * eval.L * w_heuristic;
                 };
             }
+
+            $if (depth == 1) {
+                p_k = p_k_next;
+            };
 
             $if(!it->shape().has_surface()) { $break; };
 
@@ -387,7 +392,6 @@ protected:
                     $if(light_sample.eval.pdf > 0.0f & !occluded) {
                         auto wi = light_sample.shadow_ray->direction();
                         auto eval = closure->evaluate(wo, wi);
-                        auto w = 1 / light_sample.eval.pdf;
                         Float cos_light = abs(wi.y); // hack
                         Float pd_l = inv_pi;
                         auto it_tmp = pipeline().geometry()->intersect(it->spawn_ray(wi));
@@ -399,14 +403,14 @@ protected:
                         //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                         // };
                         // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
-                        Float p_0 = inv_r(light_sample.eval.pdf);
-                        Float p_1 = dist_sqr * ite(eval.pdf > 0.f, 1.f / eval.pdf, 0.f);
+                        Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
+                        Float p_1 = dist_sqr * inv_r(eval.pdf);
                         // Float p_1 = 1;
                         // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
                         Float w_heuristic = p_1 * inv_r(p_0 + p_1 + p_k);
                         // bool enable_lt = node<VCM>()->enable_lt;
                         // if (!enable_lt) sqr_heuristic = 1;
-                        Float3 delta = spectrum->srgb(swl, w_heuristic * w * beta * eval.f * light_sample.eval.L);
+                        auto w = inv_r(light_sample.eval.pdf);
                         Li += w_heuristic * w * beta * eval.f * light_sample.eval.L;
                         // $if (p_1 < 0) {
                         //     ans_debug.x += 1;
@@ -442,7 +446,7 @@ protected:
                     $if (depth == 0) {
                         // p_k = distance_squared(hack_camera_ray->origin(), it->p()) / closure->evaluate(surface_sample.wi, wo).pdf / camera_importance;
                         auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
-                        p_k = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
+                        p_k_next = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
