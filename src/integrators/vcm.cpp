@@ -12,9 +12,16 @@
 
 namespace {
     float fov_area;
+    float a_pk = .0;
 }
 
 namespace luisa::render {
+
+namespace {
+    Float inv_r(const Float &k) {
+        return ite(k > 0, 1.0f / k, 0.f);
+    }
+}
 
 class VCM final : public ProgressiveIntegrator {
 
@@ -157,12 +164,17 @@ protected:
         uint n_lt = node<VCM>()->lt_depth;
         Float pd_l = inv_pi;
         // Float p_w = 1;
-        Float p_1 = 1;
+        Float p_1 = 1, p_0;
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
         // p_w /= pd_l;
+        
 
         $for(depth, n_lt) {
-            auto it= pipeline().geometry()->intersect(ray);
+            auto it = pipeline().geometry()->intersect(ray);
+            $if (depth == 0) {
+                auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
+                p_0 = inv_r(light_sample.eval.pdf);
+            };
             auto wi = -ray->direction();
             $if(!it->valid()) { $break; };
             $if(!it->shape().has_surface()) { $break; };
@@ -173,12 +185,15 @@ protected:
             };
             // light tracing sample camera
             auto ray_connect = it->spawn_ray_to(cs.ray->origin());
+            auto wo = ray_connect->direction();
             auto surface_tag = it->shape().surface_tag();
             auto occluded = pipeline().geometry()->intersect_any(ray_connect);
             $if (depth > 0) {
+                PolymorphicCall<Surface::Closure> call;
                 pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
-                    auto wo = ray_connect->direction();
-                    auto closure = surface->closure(it, swl, wo, 1.f, time);
+                    surface->closure(call, *it, swl, wo, 1.f, time);
+                });
+                call.execute([&](const Surface::Closure *closure) noexcept {
                     auto eval = closure->evaluate(wi, wo);
                     $if(!occluded) {
                         Float importance;
@@ -194,10 +209,9 @@ protected:
                                 //     p_w_tmp *= closure->evaluate(wo, wi).pdf / abs_dot(it->ng(), wi);
                                 // };
                                 // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
-                                Float p_k = 1.0f / (eval.pdf);
-                                // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                                Float sqr_heuristic = p_k / (p_k + p_1);
-                                // camera->film()->accumulate(pixel, spectrum->srgb(swl, sqr_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
+                                Float p_k = dist_sqr * ite(eval.pdf > 0, 1.0f / eval.pdf, 0.f) * a_pk;
+                                Float w_heuristic = p_k * inv_r(p_k + p_1 + p_0);
+                                camera->film()->accumulate(pixel, spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
                         };
                     };
@@ -208,10 +222,11 @@ protected:
             auto u_bsdf = sampler()->generate_2d();
             // evaluate material
             auto eta_scale = def(1.f);
+            PolymorphicCall<Surface::Closure> call;
             pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
-                // create closure
-                auto closure = surface->closure(it, swl, wi, 1.f, time);
-
+                surface->closure(call, *it, swl, wi, 1.f, time);
+            });
+            call.execute([&](const Surface::Closure *closure) noexcept {
                 // apply opacity map
                 auto alpha_skip = def(false);
                 if (auto o = closure->opacity()) {
@@ -247,7 +262,8 @@ protected:
                         // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf / light_sample.eval.pdf;
                         // p_1 = dist / closure->evaluate(surface_sample.wi, wi).pdf;
                         // p_1 = dist;
-                        p_1 = 1 / closure->evaluate(surface_sample.wi, wi).pdf;
+                        auto pdf = closure->evaluate(surface_sample.wi, wi).pdf;
+                        p_1 = dist * ite(pdf > 0.f, 1 / pdf, 0.f);
                     };
                 };
             });
@@ -312,6 +328,10 @@ protected:
             if (!pipeline().lights().empty()) {
                 $if(it->shape().has_light()) {
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
+                    Float p_0 = inv_r(eval.pdf);
+                    Float p_1 = inv_r(pdf_bsdf);
+                    Float w_heuristic = p_0 * inv_r(p_0 + p_1 + p_k);
+                    Li += beta * eval.L * w_heuristic;
                 };
             }
 
@@ -341,9 +361,11 @@ protected:
             // evaluate material
             auto surface_tag = it->shape().surface_tag();
             auto eta_scale = def(1.f);
+            PolymorphicCall<Surface::Closure> call;
             pipeline().surfaces().dispatch(surface_tag, [&](auto surface) noexcept {
-                // create closure
-                auto closure = surface->closure(it, swl, wo, 1.f, time);
+                surface->closure(call, *it, swl, wo, 1.f, time);
+            });
+            call.execute([&](const Surface::Closure *closure) noexcept {
 
                 // apply opacity map
                 auto alpha_skip = def(false);
@@ -377,16 +399,15 @@ protected:
                         //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                         // };
                         // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
-                        // Float p_i = dist_sqr / eval.pdf;
-                        // Float p_i = dist_sqr;
-                        Float p_1 = 1 / eval.pdf;
+                        Float p_0 = inv_r(light_sample.eval.pdf);
+                        Float p_1 = dist_sqr * ite(eval.pdf > 0.f, 1.f / eval.pdf, 0.f);
                         // Float p_1 = 1;
                         // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                        Float sqr_heuristic = p_1 / (p_1 + p_k);
-                        bool enable_lt = node<VCM>()->enable_lt;
-                        if (!enable_lt) sqr_heuristic = 1;
-                        Float3 delta = spectrum->srgb(swl, sqr_heuristic * w * beta * eval.f * light_sample.eval.L);
-                        // Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                        Float w_heuristic = p_1 * inv_r(p_0 + p_1 + p_k);
+                        // bool enable_lt = node<VCM>()->enable_lt;
+                        // if (!enable_lt) sqr_heuristic = 1;
+                        Float3 delta = spectrum->srgb(swl, w_heuristic * w * beta * eval.f * light_sample.eval.L);
+                        Li += w_heuristic * w * beta * eval.f * light_sample.eval.L;
                         // $if (p_1 < 0) {
                         //     ans_debug.x += 1;
                         // };
@@ -396,18 +417,14 @@ protected:
                         // $if (delta < 0) {
                         //     ans_debug.z += 1;
                         // };
-                        for (int k = 0; k < 3; k++) {
-                            $if (delta[k] < 0) {
-                                ans_debug[k] += 1;
-                            };
-                        }
-                        $if (depth >= 4 & depth < 5) {
-                            // Li += sqr_heuristic;
-                            Li += sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
-                        };
-                        $if (depth == 3) {
-                            Li_3 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
-                        };
+                        // for (int k = 0; k < 3; k++) {
+                        //     $if (delta[k] < 0) {
+                        //         ans_debug[k] += 1;
+                        //     };
+                        // }
+                        // $if (depth == 3) {
+                        //     Li_3 = w * beta * eval.f * light_sample.eval.L;
+                        // };
                         // $if (depth == 4) {
                         //     Li_4 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
                         // };
@@ -424,7 +441,8 @@ protected:
                     // };
                     $if (depth == 0) {
                         // p_k = distance_squared(hack_camera_ray->origin(), it->p()) / closure->evaluate(surface_sample.wi, wo).pdf / camera_importance;
-                        p_k = 1.0f / (closure->evaluate(surface_sample.wi, wo).pdf);
+                        auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
+                        p_k = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
@@ -443,12 +461,16 @@ protected:
                 beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
             };
         };
-        // return spectrum->srgb(swl, Li);
-        Float3 ans_3 = spectrum->srgb(swl, Li_3);
+        return spectrum->srgb(swl, Li);
+        // Float3 ans_3 = spectrum->srgb(swl, Li_3);
         // Float3 ans_4 = spectrum->srgb(swl, Li_4);
-        Float3 ans = spectrum->srgb(swl, Li);
-        // return make_float3(ans_3.x, 0.f, ans.z);
-        return make_float3(0.f, 0.f, ans.z);
+        // Float3 ans = spectrum->srgb(swl, Li);
+        // Float tmp = ans_3.x;
+        // $if (isnan(tmp)) {
+        //     tmp = 0;
+        // };
+        // return make_float3(tmp, 0.f, ans.z);
+        // return make_float3(0.f, 0.f, ans.z);
     }
 };
 
