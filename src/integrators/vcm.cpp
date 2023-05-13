@@ -12,7 +12,7 @@
 
 namespace {
     float fov_area;
-    float a_pk = 1;
+    float a_pk = .5;
 }
 
 namespace luisa::render {
@@ -20,6 +20,11 @@ namespace luisa::render {
 namespace {
     Float inv_r(const Float &k) {
         return ite(k > 0, 1.0f / k, 0.f);
+    }
+
+    Float bx_heuristic(const Float &a, const Float &b) {
+        // return a * inv_r(a + b);
+        return sqr(a) * inv_r(sqr(a) + sqr(b));
     }
 }
 
@@ -210,7 +215,7 @@ protected:
                                 // };
                                 // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
                                 Float p_k = dist_sqr * ite(eval.pdf > 0, 1.0f / eval.pdf, 0.f) * a_pk;
-                                Float w_heuristic = p_k * inv_r(p_k + p_1 + p_0);
+                                Float w_heuristic = bx_heuristic(p_k, p_0 + p_1);
                                 camera->film()->accumulate(pixel, spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
                         };
@@ -331,7 +336,7 @@ protected:
                     Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
                     Float p_0 = dist_sqr * inv_r(eval.pdf);
                     Float p_1 = dist_sqr * inv_r(pdf_bsdf);
-                    Float w_heuristic = p_0 * inv_r(p_0 + p_1 + p_k);
+                    Float w_heuristic = bx_heuristic(p_0, p_1 + p_k);
                     Li += beta * eval.L * w_heuristic;
                 };
             }
@@ -407,7 +412,7 @@ protected:
                         Float p_1 = dist_sqr * inv_r(eval.pdf);
                         // Float p_1 = 1;
                         // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                        Float w_heuristic = p_1 * inv_r(p_0 + p_1 + p_k);
+                        Float w_heuristic = bx_heuristic(p_1, p_0 + p_k);
                         // bool enable_lt = node<VCM>()->enable_lt;
                         // if (!enable_lt) sqr_heuristic = 1;
                         auto w = inv_r(light_sample.eval.pdf);
