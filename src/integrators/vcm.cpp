@@ -10,14 +10,11 @@
 #include <base/display.h>
 #include <core/mathematics.h>
 
-namespace {
-    float fov_area;
-    float a_pk = .5;
-}
-
 namespace luisa::render {
 
 namespace {
+    float fov_area;
+    float a_pk = .5;
     Float inv_r(const Float &k) {
         return ite(k > 0, 1.0f / k, 0.f);
     }
