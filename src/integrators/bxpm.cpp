@@ -14,6 +14,8 @@ namespace luisa::render {
 namespace {
     float fov_area;
     float a_pk = .5;
+    float a_pi = 1e6;
+    float r_pm;
     Float inv_r(const Float &k) {
         return ite(k > 0, 1.0f / k, 0.f);
     }
@@ -99,6 +101,8 @@ public:
         Buffer<float> _swl_lambda;
         Buffer<float> _swl_pdf;
 
+        Buffer<float> _p_01;
+
     public:
         Buffer<uint> tot_test;
         PhotonMap(uint photon_count, const Spectrum::Instance *spectrum) {
@@ -119,6 +123,10 @@ public:
                 _swl_pdf = device.create_buffer<float>(photon_count * spectrum->node()->dimension());
             }
             tot_test = device.create_buffer<uint>(1u);
+            _p_01 = device.create_buffer<float>(photon_count);
+        }
+        auto p_01(Expr<uint> index) const noexcept {
+            return _p_01.read(index);
         }
         auto tot_photon() const noexcept {
             return _tot.read(0u);
@@ -157,7 +165,7 @@ public:
             }
             return swl;
         }
-        void push(Expr<float3> position, SampledWavelengths swl, SampledSpectrum power, Expr<float3> wi) {
+        void push(Expr<float3> position, SampledWavelengths swl, SampledSpectrum power, Expr<float3> wi, Float p_01) {
             $if(tot_photon() < size()) {
                 auto index = _tot.atomic(0u).fetch_add(1u);
                 auto dimension = _spectrum->node()->dimension();
@@ -176,6 +184,7 @@ public:
                 for (auto i = 0u; i < 3u; ++i)
                     _grid_max.atomic(i).fetch_max(position[i]);
                 _nxt.write(index, 0u);
+                _p_01.write(index, p_01);
             };
         }
         //from uint3 grid id to hash index of the grid
@@ -434,6 +443,7 @@ protected:
         auto clamp = camera->film()->node()->clamp() * photon_per_iter * pi * radius * radius;
         PixelIndirect indirect(photon_per_iter, spectrum, camera->film(), clamp, node<bxpm>()->shared_radius());
         PhotonMap photons(photon_per_iter * node<bxpm>()->max_depth(), spectrum);
+        r_pm = radius;
 
         //initialize PixelIndirect
         Kernel2D indirect_initialize_kernel = [&]() noexcept {
@@ -449,7 +459,8 @@ protected:
             else
                 photons.write_grid_len(node<bxpm>()->initial_radius());
             //camera->pipeline().printer().info("grid:{}", photons.grid_len());
-            indirect.write_radius(index, photons.grid_len());
+            // indirect.write_radius(index, photons.grid_len());
+            indirect.write_radius(index, r_pm); // TODO: bx hack
             //camera->pipeline().printer().info("rad:{}", indirect.radius(index));
 
             indirect.write_cur_n(index, 0u);
@@ -500,7 +511,8 @@ protected:
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
             auto L = get_indirect(indirect, camera->pipeline().spectrum(), pixel_id, tot_photon);
-            camera->film()->accumulate(pixel_id, L, 0.5f * spp);
+            // camera->film()->accumulate(pixel_id, L, 0.5f * spp);
+            camera->film()->accumulate(pixel_id, L, 0.f);
         };
         bool enable_lt = node<bxpm>()->enable_lt;
         bool enable_rt = node<bxpm>()->enable_rt;
@@ -628,49 +640,16 @@ protected:
         SampledSpectrum testbeta{swl.dimension()};
         auto ray = camera_ray;
         auto pdf_bsdf = def(1e16f);
+        auto hack_camera_ray = camera_ray;
+        Float p_k;
         $for(depth, node<bxpm>()->max_depth()) {
 
             // trace
             auto wo = -ray->direction();
             auto it = pipeline().geometry()->intersect(ray);
-
-            // miss
-            if (node<bxpm>()->separate_direct()) {
-
-                $if(!it->valid()) {
-                    if (pipeline().environment()) {
-                        auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                        Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                    }
-                    $break;
-                };
-
-                // hit light
-                if (!pipeline().lights().empty()) {
-                    $if(it->shape().has_light()) {
-                        auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                        Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                    };
-                }
-            } else {
-                $if(depth == 0) {
-                    $if(!it->valid()) {
-                        if (pipeline().environment()) {
-                            auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                            Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                        }
-                        $break;
-                    };
-
-                    // hit light
-                    if (!pipeline().lights().empty()) {
-                        $if(it->shape().has_light()) {
-                            auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
-                            Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                        };
-                    }
-                };
-            }
+            $if(!it->valid()) {
+                $break;
+            };
 
             $if(!it->shape().has_surface()) { $break; };
 
@@ -720,16 +699,6 @@ protected:
                     if (auto dispersive = closure->is_dispersive()) {
                         $if(*dispersive) { swl.terminate_secondary(); };
                     }
-                    // direct lighting
-                    if (node<bxpm>()->separate_direct()) {
-                        $if(light_sample.eval.pdf > 0.0f & !occluded) {
-                            auto wi = light_sample.shadow_ray->direction();
-                            auto eval = closure->evaluate(wo, wi);
-                            auto w = balance_heuristic(light_sample.eval.pdf, eval.pdf) /
-                                     light_sample.eval.pdf;
-                            Li += w * beta * eval.f * light_sample.eval.L;
-                        };
-                    }
                     //TODO: get this done
                     auto roughness = closure->roughness();
                     Bool stop_check;
@@ -738,7 +707,8 @@ protected:
                     } else {
                         stop_check = true;//always stop at first intersection
                     }
-                    $if(stop_check) {
+                    $if(depth > 0 & stop_check) {
+                    // $if(stop_check) {
                         stop_direct = true;
                         auto grid = photons.point_to_grid(it->p());
                         $for(x, grid.x - 1, grid.x + 2) {
@@ -756,12 +726,14 @@ protected:
                                             auto test_grid = photons.point_to_grid(position);
                                             auto eval_photon = closure->evaluate(wo, photon_wi);
                                             auto wi_local = it->shading().world_to_local(photon_wi);
+                                            Float p_i = pi * sqr(r_pm) * inv_r(eval_photon.pdf) * a_pi;
+                                            Float w_heuristic = bx_heuristic(p_i, p_k + photons.p_01(photon_index));
                                             Float3 Phi;
                                             if (!spectrum->node()->is_fixed()) {
                                                 auto photon_swl = photons.swl(photon_index);
-                                                Phi = spectrum->wavelength_mul(swl, beta * (eval_photon.f / abs_cos_theta(wi_local)), photon_swl, photon_beta);
+                                                Phi = spectrum->wavelength_mul(swl, beta * (eval_photon.f / abs_cos_theta(wi_local)), photon_swl, photon_beta) * w_heuristic;
                                             } else {
-                                                Phi = spectrum->srgb(swl, beta * photon_beta * eval_photon.f / abs_cos_theta(wi_local));
+                                                Phi = spectrum->srgb(swl, beta * photon_beta * eval_photon.f / abs_cos_theta(wi_local)) * w_heuristic;
                                             }
                                             //testbeta += Phi;
                                             indirect.add_phi(pixel_id, Phi);
@@ -781,6 +753,10 @@ protected:
                     pdf_bsdf = surface_sample.eval.pdf;
                     auto w = ite(surface_sample.eval.pdf > 0.f, 1.f / surface_sample.eval.pdf, 0.f);
                     beta *= w * surface_sample.eval.f;
+                    $if (depth == 0) {
+                        auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
+                        p_k = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
+                    };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
                     $switch(surface_sample.event) {
@@ -791,32 +767,9 @@ protected:
             });
             beta = zero_if_any_nan(beta);
             $if(beta.all([](auto b) noexcept { return b <= 0.f; })) { $break; };
-            if (node<bxpm>()->separate_direct()) {
-                $if(stop_direct) {
-                    auto it_next = pipeline().geometry()->intersect(ray);
-
-                    // miss
-                    $if(!it_next->valid()) {
-                        if (pipeline().environment()) {
-                            auto eval = light_sampler()->evaluate_miss(ray->direction(), swl, time);
-                            Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                        }
-                    };
-
-                    // hit light
-                    if (!pipeline().lights().empty()) {
-                        $if(it_next->shape().has_light()) {
-                            auto eval = light_sampler()->evaluate_hit(*it_next, ray->origin(), swl, time);
-                            Li += beta * eval.L * balance_heuristic(pdf_bsdf, eval.pdf);
-                        };
-                    }
-                    $break;
-                };
-            } else {
-                $if(stop_direct) {
-                    $break;
-                };
-            }
+            $if(stop_direct) {
+                $break;
+            };
             $if(depth + 1u >= rr_depth) {
                 beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
             };
@@ -842,11 +795,16 @@ protected:
 
         auto ray = light_sample.shadow_ray;
         auto pdf_bsdf = def(1e16f);
+        Float p_0, p_1;
         $for(depth, node<bxpm>()->max_depth()) {
 
             // trace
             auto wi = -ray->direction();
             auto it = pipeline().geometry()->intersect(ray);
+            $if (depth == 0) {
+                auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
+                p_0 = inv_r(light_sample.eval.pdf);
+            };
 
             // miss
             $if(!it->valid()) {
@@ -861,15 +819,13 @@ protected:
             auto u_rr = def(0.f);
             auto rr_depth = node<bxpm>()->rr_depth();
             $if(depth + 1u >= rr_depth) { u_rr = sampler()->generate_1d(); };
-            if (node<bxpm>()->separate_direct()) {
-                $if(depth > 0) {
-                    photons.push(it->p(), swl, beta, wi);
-                };
-            } else {
-                $if(depth >= 0) {//change this to 0 can get direct light
-                    photons.push(it->p(), swl, beta, wi);
-                };
+            Bool condition = depth > 0;
+            if (!node<bxpm>()->separate_direct()) {
+                condition = depth >= 0;
             }
+            $if (condition) {
+                photons.push(it->p(), swl, beta, wi, p_0 + p_1);
+            };
             // evaluate material
             auto surface_tag = it->shape().surface_tag();
             auto eta_scale = def(1.f);
@@ -909,6 +865,11 @@ protected:
                     };
                     eta_scale *= ite(beta.max() < bnew.max(), 1.f, bnew.max() / beta.max());
                     beta = bnew;
+                    $if (depth == 0) {
+                        auto dist = distance_squared(light_sample.shadow_ray->origin(), it->p());
+                        auto pdf = closure->evaluate(surface_sample.wi, wi).pdf;
+                        p_1 = dist * ite(pdf > 0.f, 1 / pdf, 0.f);
+                    };
                 };
             });
             beta = zero_if_any_nan(beta);
