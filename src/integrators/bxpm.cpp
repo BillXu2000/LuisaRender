@@ -20,9 +20,13 @@ namespace {
         return ite(k > 0, 1.0f / k, 0.f);
     }
 
+    Float bx_power(const Float &a) {
+        return sqr(a);
+    }
+
     Float bx_heuristic(const Float &a, const Float &b) {
-        // return a * inv_r(a + b);
-        return sqr(a) * inv_r(sqr(a) + sqr(b));
+        return a * inv_r(a + b);
+        // return sqr(a) * inv_r(sqr(a) + sqr(b));
     }
 }
 
@@ -48,7 +52,7 @@ private:
     bool _shared_radius;
 
 public:
-    bool enable_lt, enable_rt, enable_pm;
+    bool enable_lt, enable_rt, enable_pm, enable_i0, enable_i1;
     uint lt_depth, debug_depth;
     bxpm(Scene *scene, const SceneNodeDesc *desc) noexcept
         : ProgressiveIntegrator{scene, desc},
@@ -62,6 +66,8 @@ public:
           enable_lt{desc->property_bool_or_default("enable_lt", true)},
           enable_rt{desc->property_bool_or_default("enable_rt", true)},
           enable_pm{desc->property_bool_or_default("enable_pm", true)},
+          enable_i0{desc->property_bool_or_default("enable_i0", true)},
+          enable_i1{desc->property_bool_or_default("enable_i1", true)},
           lt_depth{std::max(desc->property_uint_or_default("lt_depth", 5u), 0u)},
           debug_depth{std::max(desc->property_uint_or_default("debug_depth", 0u), 0u)} {}
 
@@ -904,7 +910,7 @@ protected:
         uint n_lt = node<bxpm>()->lt_depth;
         Float pd_l = inv_pi;
         // Float p_w = 1;
-        Float p_1 = 1, p_0;
+        Float p_1 = 1, p_0, p_i = 0;
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
         // p_w /= pd_l;
         
@@ -950,10 +956,15 @@ protected:
                                 // };
                                 // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
                                 Float p_k = dist_sqr * ite(eval.pdf > 0, 1.0f / eval.pdf, 0.f) * a_pk;
-                                Float w_heuristic = bx_heuristic(p_k, p_0 + p_1);
+                                Float w_heuristic = bx_heuristic(p_k, p_0 + p_1 + p_i);
                                 camera->film()->accumulate(pixel, spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
                         };
+                    };
+                    auto roughness = closure->roughness();
+                    $if (depth > 0 & roughness.x * roughness.y > 0.16f) {
+                        auto eval = closure->evaluate(wo, wi);
+                        p_i = pi * sqr(r_pm) * inv_r(eval.pdf) * a_pi;
                     };
                 });
             };
@@ -1052,6 +1063,9 @@ protected:
         auto hack_camera_ray = camera_ray;
         auto pdf_bsdf = def(1e16f);
         Float3 ans_debug = make_float3();
+        Float p_i = 0, p_i_next = -1;
+        bool enable_i0 = node<bxpm>()->enable_i0;
+        bool enable_i1 = node<bxpm>()->enable_i1;
         $for(depth, node<bxpm>()->max_depth()) {
 
             // trace
@@ -1065,19 +1079,37 @@ protected:
             };
 
             // hit light
-            if (!pipeline().lights().empty()) {
+            if (!pipeline().lights().empty() && enable_i0) {
                 $if(it->shape().has_light()) {
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
                     Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
+                    // Float p_0 = dist_sqr * it->triangle_area();
                     Float p_0 = dist_sqr * inv_r(eval.pdf);
                     Float p_1 = dist_sqr * inv_r(pdf_bsdf);
-                    Float w_heuristic = bx_heuristic(p_0, p_1 + p_k);
+                    Float w_heuristic = bx_heuristic(p_0, p_1 + p_k + p_i);
                     Li += beta * eval.L * w_heuristic;
+                    // $if (depth == 5 & w_heuristic > .9f) {
+                    //     // Li += p_0 / p_i * w_heuristic;
+                    //     ans_debug.x = w_heuristic;
+                    //     ans_debug.y = p_0;
+                    //     // ans_debug.z = p_1 + p_i + p_k;
+                    //     // ans_debug.z = p_i;
+                    //     $if (p_i_next == 0) {
+                    //         ans_debug.y = 128;
+                    //     };
+                    //     $if (p_i == 0) {
+                    //         ans_debug.z = 128;
+                    //     };
+                    //     ans_debug = ans_debug;
+                    // };
                 };
             }
 
             $if (depth == 1) {
                 p_k = p_k_next;
+            };
+            $if (p_i_next >= 0) {
+                p_i = p_i_next;
             };
 
             $if(!it->shape().has_surface()) { $break; };
@@ -1129,50 +1161,52 @@ protected:
                         $if(*dispersive) { swl.terminate_secondary(); };
                     }
                     // direct lighting
-                    $if(light_sample.eval.pdf > 0.0f & !occluded) {
-                        auto wi = light_sample.shadow_ray->direction();
-                        auto eval = closure->evaluate(wo, wi);
-                        Float cos_light = abs(wi.y); // hack
-                        Float pd_l = inv_pi;
-                        auto it_tmp = pipeline().geometry()->intersect(it->spawn_ray(wi));
-                        Float dist_sqr = compute::distance_squared(it->p(), it_tmp->p());
-                        // Float p_w_tmp = 1.f;
-                        // p_w_tmp *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
-                        // p_w_tmp *= pd_l;
-                        // $if (depth > 0) {
-                        //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
-                        // };
-                        // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
-                        Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
-                        Float p_1 = dist_sqr * inv_r(eval.pdf);
-                        // Float p_1 = 1;
-                        // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
-                        Float w_heuristic = bx_heuristic(p_1, p_0 + p_k);
-                        // bool enable_lt = node<bxpm>()->enable_lt;
-                        // if (!enable_lt) sqr_heuristic = 1;
-                        auto w = inv_r(light_sample.eval.pdf);
-                        Li += w_heuristic * w * beta * eval.f * light_sample.eval.L;
-                        // $if (p_1 < 0) {
-                        //     ans_debug.x += 1;
-                        // };
-                        // $if (p_k < 0) {
-                        //     ans_debug.y += 1;
-                        // };
-                        // $if (delta < 0) {
-                        //     ans_debug.z += 1;
-                        // };
-                        // for (int k = 0; k < 3; k++) {
-                        //     $if (delta[k] < 0) {
-                        //         ans_debug[k] += 1;
-                        //     };
-                        // }
-                        // $if (depth == 3) {
-                        //     Li_3 = w * beta * eval.f * light_sample.eval.L;
-                        // };
-                        // $if (depth == 4) {
-                        //     Li_4 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
-                        // };
-                    };
+                    auto wi = light_sample.shadow_ray->direction();
+                    auto eval = closure->evaluate(wo, wi);
+                    if (enable_i1) {
+                        $if(light_sample.eval.pdf > 0.0f & !occluded) {
+                            Float cos_light = abs(wi.y); // hack
+                            Float pd_l = inv_pi;
+                            auto it_tmp = pipeline().geometry()->intersect(it->spawn_ray(wi));
+                            Float dist_sqr = compute::distance_squared(it->p(), it_tmp->p());
+                            // Float p_w_tmp = 1.f;
+                            // p_w_tmp *= (abs_dot(it->ng(), wi) * cos_light / dist_sqr); // G
+                            // p_w_tmp *= pd_l;
+                            // $if (depth > 0) {
+                            //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
+                            // };
+                            // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
+                            Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
+                            Float p_1 = dist_sqr * inv_r(eval.pdf);
+                            // Float p_1 = 1;
+                            // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
+                            Float w_heuristic = bx_heuristic(p_1, p_0 + p_k + p_i);
+                            // bool enable_lt = node<bxpm>()->enable_lt;
+                            // if (!enable_lt) sqr_heuristic = 1;
+                            auto w = inv_r(light_sample.eval.pdf);
+                            Li += w_heuristic * w * beta * eval.f * light_sample.eval.L;
+                            // $if (p_1 < 0) {
+                            //     ans_debug.x += 1;
+                            // };
+                            // $if (p_k < 0) {
+                            //     ans_debug.y += 1;
+                            // };
+                            // $if (delta < 0) {
+                            //     ans_debug.z += 1;
+                            // };
+                            // for (int k = 0; k < 3; k++) {
+                            //     $if (delta[k] < 0) {
+                            //         ans_debug[k] += 1;
+                            //     };
+                            // }
+                            // $if (depth == 3) {
+                            //     Li_3 = w * beta * eval.f * light_sample.eval.L;
+                            // };
+                            // $if (depth == 4) {
+                            //     Li_4 = sqr_heuristic * w * beta * eval.f * light_sample.eval.L;
+                            // };
+                        };
+                    }
                     // sample material
                     auto surface_sample = closure->sample(wo, u_lobe, u_bsdf);
                     ray = it->spawn_ray(surface_sample.wi);
@@ -1185,8 +1219,13 @@ protected:
                     // };
                     $if (depth == 0) {
                         // p_k = distance_squared(hack_camera_ray->origin(), it->p()) / closure->evaluate(surface_sample.wi, wo).pdf / camera_importance;
-                        auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
+                        // auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
+                        auto pdf = surface_sample.eval.pdf;
                         p_k_next = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
+                    };
+                    auto roughness = closure->roughness();
+                    $if (depth > 0 & p_i_next < 0 & roughness.x * roughness.y > 0.16f) {
+                        p_i_next = pi * sqr(r_pm) * inv_r(pdf_bsdf) * a_pi;
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
@@ -1205,7 +1244,8 @@ protected:
                 beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
             };
         };
-        return spectrum->srgb(swl, Li);
+        // return spectrum->srgb(swl, Li);
+        return spectrum->srgb(swl, Li) + ans_debug;
         // Float3 ans_3 = spectrum->srgb(swl, Li_3);
         // Float3 ans_4 = spectrum->srgb(swl, Li_4);
         // Float3 ans = spectrum->srgb(swl, Li);
