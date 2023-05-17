@@ -13,8 +13,8 @@ namespace luisa::render {
 
 namespace {
     float fov_area;
-    float a_pk = .5;
-    float a_p0 = .5;
+    float a_pk = 1;
+    float a_p0 = 1;
     float a_pi = -1;
     // float r_pm;
     Float inv_r(const Float &k) {
@@ -22,8 +22,8 @@ namespace {
     }
 
     Float bx_power(const Float &a) {
-        // return sqr(a);
-        return a;
+        return sqr(a);
+        // return a;
     }
 
     Float bx_heuristic(const Float &a, const Float &b) {
