@@ -14,6 +14,7 @@ namespace luisa::render {
 namespace {
     float fov_area;
     float a_pk = .5;
+    float a_p0 = .5;
     float a_pi = -1;
     // float r_pm;
     Float inv_r(const Float &k) {
@@ -814,7 +815,7 @@ protected:
                 auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
                 Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
                 // p_0 = inv_r(light_sample.eval.pdf); // p0hack
-                p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
+                p_0 = dist_sqr * inv_r(light_sample.eval.pdf) * a_p0;
                 p_0 = bx_power(p_0);
             };
 
@@ -929,7 +930,7 @@ protected:
                 auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
                 Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
                 // p_0 = inv_r(light_sample.eval.pdf); // p0hack
-                p_0 = dist_sqr * inv_r(light_sample.eval.pdf); // p0hack
+                p_0 = dist_sqr * inv_r(light_sample.eval.pdf) * a_p0; // p0hack
                 p_0 = bx_power(p_0);
             };
             auto wi = -ray->direction();
@@ -1099,7 +1100,7 @@ protected:
                     auto eval = light_sampler()->evaluate_hit(*it, ray->origin(), swl, time);
                     Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
                     // Float p_0 = dist_sqr * it->triangle_area();
-                    Float p_0 = dist_sqr * inv_r(eval.pdf);
+                    Float p_0 = dist_sqr * inv_r(eval.pdf) * a_p0;
                     Float p_1 = dist_sqr * inv_r(pdf_bsdf);
                     p_0 = bx_power(p_0);
                     p_1 = bx_power(p_1);
@@ -1193,7 +1194,7 @@ protected:
                             //     p_w_tmp *= closure->evaluate(wi, wo).pdf / abs_dot(it->ng(), wo);
                             // };
                             // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
-                            Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
+                            Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf) * a_p0;
                             Float p_1 = dist_sqr * inv_r(eval.pdf);
                             p_0 = bx_power(p_0);
                             p_1 = bx_power(p_1);
