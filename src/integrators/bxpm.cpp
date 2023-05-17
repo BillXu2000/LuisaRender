@@ -14,14 +14,15 @@ namespace luisa::render {
 namespace {
     float fov_area;
     float a_pk = .5;
-    float a_pi = 1e6;
-    float r_pm;
+    float a_pi = -1;
+    // float r_pm;
     Float inv_r(const Float &k) {
         return ite(k > 0, 1.0f / k, 0.f);
     }
 
     Float bx_power(const Float &a) {
-        return sqr(a);
+        // return sqr(a);
+        return a;
     }
 
     Float bx_heuristic(const Float &a, const Float &b) {
@@ -388,8 +389,8 @@ public:
         }
         void pixel_info_update(Expr<uint2> pixel_id) {
             $if(cur_n(pixel_id) > 0) {
-                // Float gamma = 2.0f / 3.0f;
-                Float gamma = 1;
+                Float gamma = 2.0f / 3.0f;
+                // Float gamma = 1;
                 UInt n_new = n_photon(pixel_id) + cur_n(pixel_id);
                 Float r_new = radius(pixel_id) * sqrt(n_new * gamma / (n_photon(pixel_id) * gamma + cur_n(pixel_id)));
                 //indirect.write_tau(pixel_id, (indirect.tau(pixel_id) + indirect.phi(pixel_id)) * (r_new * r_new) / (indirect.radius(pixel_id) * indirect.radius(pixel_id)));
@@ -405,8 +406,8 @@ public:
         void shared_update() {
             auto pixel_id = make_uint2(0, 0);
             $if(cur_n(pixel_id) > 0) {
-                // Float gamma = 2.0f / 3.0f;
-                Float gamma = 1;
+                Float gamma = 2.0f / 3.0f;
+                // Float gamma = 1;
                 UInt n_new = n_photon(pixel_id) + cur_n(pixel_id);
                 Float r_new = radius(pixel_id) * sqrt(n_new * gamma / (n_photon(pixel_id) * gamma + cur_n(pixel_id)));
                 write_n_photon(pixel_id, n_new);
@@ -449,7 +450,8 @@ protected:
         auto clamp = camera->film()->node()->clamp() * photon_per_iter * pi * radius * radius;
         PixelIndirect indirect(photon_per_iter, spectrum, camera->film(), clamp, node<bxpm>()->shared_radius());
         PhotonMap photons(photon_per_iter * node<bxpm>()->max_depth(), spectrum);
-        r_pm = radius;
+        a_pi = float(photon_per_iter * node<bxpm>()->rr_depth());
+        float _outer_radius = radius;
 
         //initialize PixelIndirect
         Kernel2D indirect_initialize_kernel = [&]() noexcept {
@@ -466,7 +468,7 @@ protected:
                 photons.write_grid_len(node<bxpm>()->initial_radius());
             //camera->pipeline().printer().info("grid:{}", photons.grid_len());
             // indirect.write_radius(index, photons.grid_len());
-            indirect.write_radius(index, r_pm); // TODO: bx hack
+            indirect.write_radius(index, _outer_radius); // TODO: bx hack
             //camera->pipeline().printer().info("rad:{}", indirect.radius(index));
 
             indirect.write_cur_n(index, 0u);
@@ -528,7 +530,7 @@ protected:
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
             if (enable_lt) {
-                auto L = Li_vcm(camera, frame_index, pixel_id, time, shutter_weight);
+                auto L = Li_vcm(camera, frame_index, pixel_id, time, shutter_weight, indirect);
             }
         };
 
@@ -536,7 +538,7 @@ protected:
             set_block_size(16u, 16u, 1u);
             auto pixel_id = dispatch_id().xy();
             if (enable_rt) {
-                auto L = Li_vcm_rt(camera, frame_index, pixel_id, time);
+                auto L = Li_vcm_rt(camera, frame_index, pixel_id, time, indirect);
                 camera->film()->accumulate(pixel_id, L);
             }
             else {
@@ -577,22 +579,20 @@ protected:
                 command_buffer << render_rt(sample_id, s.point.time, s.point.weight).dispatch(resolution);
                 //emit phtons then calculate L
                 //TODO: accurate size reset
-                if (enable_pm) {
-                    command_buffer
-                        << photon_reset().dispatch(photons.size());
-                    command_buffer << emit(sample_id, s.point.time)
-                                        .dispatch(make_uint2(add_x, resolution.y));
-                    if (!initial_flag) {//wait for first world statistic
-                        initial_flag = true;
-                        command_buffer << indirect_initialize().dispatch(resolution);
-                    }
-                    command_buffer << photon_grid().dispatch(photons.size());
-                    command_buffer << render(sample_id, s.point.time, s.point.weight)
-                                        .dispatch(resolution);
-                    command_buffer << update().dispatch(resolution);
-                    if (node<bxpm>()->shared_radius()) {
-                        command_buffer << shared_update().dispatch(1u);
-                    }
+                command_buffer
+                    << photon_reset().dispatch(photons.size());
+                command_buffer << emit(sample_id, s.point.time)
+                                    .dispatch(make_uint2(add_x, resolution.y));
+                if (!initial_flag) {//wait for first world statistic
+                    initial_flag = true;
+                    command_buffer << indirect_initialize().dispatch(resolution);
+                }
+                command_buffer << photon_grid().dispatch(photons.size());
+                command_buffer << render(sample_id, s.point.time, s.point.weight)
+                                    .dispatch(resolution);
+                command_buffer << update().dispatch(resolution);
+                if (node<bxpm>()->shared_radius()) {
+                    command_buffer << shared_update().dispatch(1u);
                 }
                 sample_id++;
                 auto dispatches_per_commit =
@@ -648,6 +648,7 @@ protected:
         auto pdf_bsdf = def(1e16f);
         auto hack_camera_ray = camera_ray;
         Float p_k;
+        Float r_pm = indirect.radius(make_uint2());
         $for(depth, node<bxpm>()->max_depth()) {
 
             // trace
@@ -733,6 +734,7 @@ protected:
                                             auto eval_photon = closure->evaluate(wo, photon_wi);
                                             auto wi_local = it->shading().world_to_local(photon_wi);
                                             Float p_i = pi * sqr(r_pm) * inv_r(eval_photon.pdf) * a_pi;
+                                            p_i = bx_power(p_i);
                                             Float w_heuristic = bx_heuristic(p_i, p_k + photons.p_01(photon_index));
                                             Float3 Phi;
                                             if (!spectrum->node()->is_fixed()) {
@@ -762,6 +764,7 @@ protected:
                     $if (depth == 0) {
                         auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
                         p_k = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
+                        p_k = bx_power(p_k);
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
@@ -809,7 +812,10 @@ protected:
             auto it = pipeline().geometry()->intersect(ray);
             $if (depth == 0) {
                 auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
-                p_0 = inv_r(light_sample.eval.pdf);
+                Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
+                // p_0 = inv_r(light_sample.eval.pdf); // p0hack
+                p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
+                p_0 = bx_power(p_0);
             };
 
             // miss
@@ -875,6 +881,7 @@ protected:
                         auto dist = distance_squared(light_sample.shadow_ray->origin(), it->p());
                         auto pdf = closure->evaluate(surface_sample.wi, wi).pdf;
                         p_1 = dist * ite(pdf > 0.f, 1 / pdf, 0.f);
+                        p_1 = bx_power(p_1);
                     };
                 };
             });
@@ -889,7 +896,7 @@ protected:
         };
     }
     [[nodiscard]] Float3 Li_vcm(const Camera::Instance *camera, Expr<uint> frame_index,
-                            Expr<uint2> pixel_id, Expr<float> time, Expr<float> shutter_weight) const noexcept {
+                            Expr<uint2> pixel_id, Expr<float> time, Expr<float> shutter_weight, PixelIndirect &indirect) const noexcept {
         sampler()->start(pixel_id, frame_index);
         auto u_filter = sampler()->generate_pixel_2d();
         auto u_lens = camera->node()->requires_lens_sampling() ? sampler()->generate_2d() : make_float2(.5f);
@@ -913,13 +920,17 @@ protected:
         Float p_1 = 1, p_0, p_i = 0;
         Float3 camera_normal = normalize(make_float3(0.5, -0.5, 1));
         // p_w /= pd_l;
+        Float r_pm = indirect.radius(make_uint2());
         
 
         $for(depth, n_lt) {
             auto it = pipeline().geometry()->intersect(ray);
             $if (depth == 0) {
                 auto light_sample = light_sampler()->sample(*it, u_light_selection, u_light_surface, swl, time);
-                p_0 = inv_r(light_sample.eval.pdf);
+                Float dist_sqr = compute::distance_squared(it->p(), ray->origin());
+                // p_0 = inv_r(light_sample.eval.pdf); // p0hack
+                p_0 = dist_sqr * inv_r(light_sample.eval.pdf); // p0hack
+                p_0 = bx_power(p_0);
             };
             auto wi = -ray->direction();
             $if(!it->valid()) { $break; };
@@ -956,6 +967,7 @@ protected:
                                 // };
                                 // Float p_i = 1.0f / (eval.pdf * importance / dist_sqr);
                                 Float p_k = dist_sqr * ite(eval.pdf > 0, 1.0f / eval.pdf, 0.f) * a_pk;
+                                p_k = bx_power(p_k);
                                 Float w_heuristic = bx_heuristic(p_k, p_0 + p_1 + p_i);
                                 camera->film()->accumulate(pixel, spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
                             };
@@ -965,6 +977,7 @@ protected:
                     $if (depth > 0 & roughness.x * roughness.y > 0.16f) {
                         auto eval = closure->evaluate(wo, wi);
                         p_i = pi * sqr(r_pm) * inv_r(eval.pdf) * a_pi;
+                        p_i = bx_power(p_i);
                     };
                 });
             };
@@ -1015,6 +1028,7 @@ protected:
                         // p_1 = dist;
                         auto pdf = closure->evaluate(surface_sample.wi, wi).pdf;
                         p_1 = dist * ite(pdf > 0.f, 1 / pdf, 0.f);
+                        p_1 = bx_power(p_1);
                     };
                 };
             });
@@ -1035,7 +1049,7 @@ protected:
     }
 
     [[nodiscard]] Float3 Li_vcm_rt(const Camera::Instance *camera, Expr<uint> frame_index,
-                            Expr<uint2> pixel_id, Expr<float> time) const noexcept {
+                            Expr<uint2> pixel_id, Expr<float> time, PixelIndirect &indirect) const noexcept {
 
         sampler()->start(pixel_id, frame_index);
         auto u_filter = sampler()->generate_pixel_2d();
@@ -1052,6 +1066,7 @@ protected:
 
         // Float p_w = 1;
         Float p_k = 0, p_k_next;
+        Float r_pm = indirect.radius(make_uint2());
         Float camera_importance;
         Float cos_eye = abs_dot(camera_ray->direction(), camera_normal); // todo: bx2k hack
         {
@@ -1086,6 +1101,8 @@ protected:
                     // Float p_0 = dist_sqr * it->triangle_area();
                     Float p_0 = dist_sqr * inv_r(eval.pdf);
                     Float p_1 = dist_sqr * inv_r(pdf_bsdf);
+                    p_0 = bx_power(p_0);
+                    p_1 = bx_power(p_1);
                     Float w_heuristic = bx_heuristic(p_0, p_1 + p_k + p_i);
                     Li += beta * eval.L * w_heuristic;
                     // $if (depth == 5 & w_heuristic > .9f) {
@@ -1178,6 +1195,8 @@ protected:
                             // Float p_i = 1.0f / (eval.pdf * pd_l / dist_sqr);
                             Float p_0 = dist_sqr * inv_r(light_sample.eval.pdf);
                             Float p_1 = dist_sqr * inv_r(eval.pdf);
+                            p_0 = bx_power(p_0);
+                            p_1 = bx_power(p_1);
                             // Float p_1 = 1;
                             // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
                             Float w_heuristic = bx_heuristic(p_1, p_0 + p_k + p_i);
@@ -1222,10 +1241,12 @@ protected:
                         // auto pdf = closure->evaluate(surface_sample.wi, wo).pdf;
                         auto pdf = surface_sample.eval.pdf;
                         p_k_next = distance_squared(hack_camera_ray->origin(), it->p()) * ite(pdf > 0.f, 1.f / pdf, 0.f) * a_pk;
+                        p_k_next = bx_power(p_k_next);
                     };
                     auto roughness = closure->roughness();
                     $if (depth > 0 & p_i_next < 0 & roughness.x * roughness.y > 0.16f) {
                         p_i_next = pi * sqr(r_pm) * inv_r(pdf_bsdf) * a_pi;
+                        p_i_next = bx_power(p_i_next);
                     };
                     // apply eta scale
                     auto eta = closure->eta().value_or(1.f);
