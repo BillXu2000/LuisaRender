@@ -54,7 +54,7 @@ private:
     bool _shared_radius;
 
 public:
-    bool enable_lt, enable_rt, enable_pm, enable_i0, enable_i1;
+    bool enable_lt, enable_rt, enable_pm, enable_i0, enable_i1, export_w;
     uint lt_depth, debug_depth;
     bxpm(Scene *scene, const SceneNodeDesc *desc) noexcept
         : ProgressiveIntegrator{scene, desc},
@@ -70,6 +70,7 @@ public:
           enable_pm{desc->property_bool_or_default("enable_pm", true)},
           enable_i0{desc->property_bool_or_default("enable_i0", true)},
           enable_i1{desc->property_bool_or_default("enable_i1", true)},
+          export_w{desc->property_bool_or_default("export_w", false)},
           lt_depth{std::max(desc->property_uint_or_default("lt_depth", 5u), 0u)},
           debug_depth{std::max(desc->property_uint_or_default("debug_depth", 0u), 0u)} {}
 
@@ -575,7 +576,7 @@ protected:
         for (auto s : shutter_samples) {
             pipeline().update(command_buffer, s.point.time);
             runtime_spp += s.spp;
-            for (auto i = 0u; i < s.spp; i++) {
+            for (auto i = 0u; i < s.spp; i += 2) {
                 command_buffer << render_lt(sample_id, s.point.time, s.point.weight).dispatch(resolution);
                 command_buffer << render_rt(sample_id, s.point.time, s.point.weight).dispatch(resolution);
                 //emit phtons then calculate L
@@ -595,7 +596,7 @@ protected:
                 if (node<bxpm>()->shared_radius()) {
                     command_buffer << shared_update().dispatch(1u);
                 }
-                sample_id++;
+                sample_id += 2;
                 auto dispatches_per_commit =
                     display() && !display()->should_close() ?
                         node<ProgressiveIntegrator>()->display_interval() :
@@ -615,7 +616,7 @@ protected:
         LUISA_INFO("total spp:{}", runtime_spp);
         //tot_photon is photon_per_iter not photon_per_iter*spp because of unnormalized samples
         if (enable_pm) {
-            command_buffer << indirect_draw(node<bxpm>()->photon_per_iter(), runtime_spp).dispatch(resolution);
+            command_buffer << indirect_draw(node<bxpm>()->photon_per_iter(), runtime_spp / 2).dispatch(resolution);
         }
         command_buffer << synchronize();
         command_buffer << pipeline().printer().retrieve();
@@ -745,6 +746,10 @@ protected:
                                                 Phi = spectrum->srgb(swl, beta * photon_beta * eval_photon.f / abs_cos_theta(wi_local)) * w_heuristic;
                                             }
                                             //testbeta += Phi;
+                                            if (node<bxpm>()->export_w) {
+                                                Phi.y = 0;
+                                                Phi.z = 0;
+                                            }
                                             indirect.add_phi(pixel_id, Phi);
                                             indirect.add_cur_n(pixel_id, 1u);
                                             //pipeline().printer().info("render:{}", indirect.cur_n(pixel_id));
@@ -785,7 +790,13 @@ protected:
             };
         };
         //return spectrum->srgb(swl, testbeta);//DEBUG
-        return spectrum->srgb(swl, Li);
+        // if (node<bxpm>()->export_w) {
+        //     return sum_w;
+        // }
+        // else {
+        //     return spectrum->srgb(swl, Li);
+        // }
+        return make_float3(0);
     }
 
     void photon_tracing(PhotonMap &photons, const Camera::Instance *camera, Expr<uint> frame_index,
@@ -970,7 +981,12 @@ protected:
                                 Float p_k = dist_sqr * ite(eval.pdf > 0, 1.0f / eval.pdf, 0.f) * a_pk;
                                 p_k = bx_power(p_k);
                                 Float w_heuristic = bx_heuristic(p_k, p_0 + p_1 + p_i);
-                                camera->film()->accumulate(pixel, spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr), 0.f);
+                                Float3 ans = spectrum->srgb(swl, w_heuristic * beta * eval.f * importance / dist_sqr);
+                                if (node<bxpm>()->export_w) {
+                                    ans.x = 0;
+                                    ans.z = 0;
+                                }
+                                camera->film()->accumulate(pixel, ans, 0.f);
                             };
                         };
                     };
@@ -1075,6 +1091,7 @@ protected:
             // p_w = 1 / importance;
         }
 
+        Float3 sum_w = make_float3(0);
         auto ray = camera_ray;
         auto hack_camera_ray = camera_ray;
         auto pdf_bsdf = def(1e16f);
@@ -1105,6 +1122,7 @@ protected:
                     p_0 = bx_power(p_0);
                     p_1 = bx_power(p_1);
                     Float w_heuristic = bx_heuristic(p_0, p_1 + p_k + p_i);
+                    if (node<bxpm>()->export_w) sum_w.y += w_heuristic;
                     Li += beta * eval.L * w_heuristic;
                     // $if (depth == 5 & w_heuristic > .9f) {
                     //     // Li += p_0 / p_i * w_heuristic;
@@ -1201,6 +1219,7 @@ protected:
                             // Float p_1 = 1;
                             // Float sqr_heuristic = 1 / (1 + sqr(p_w * p_w_tmp));
                             Float w_heuristic = bx_heuristic(p_1, p_0 + p_k + p_i);
+                            if (node<bxpm>()->export_w) sum_w.y += w_heuristic;
                             // bool enable_lt = node<bxpm>()->enable_lt;
                             // if (!enable_lt) sqr_heuristic = 1;
                             auto w = inv_r(light_sample.eval.pdf);
@@ -1266,8 +1285,13 @@ protected:
                 beta *= ite(q < rr_threshold, 1.0f / q, 1.f);
             };
         };
+        Float3 ans = spectrum->srgb(swl, Li);
+        if (node<bxpm>()->export_w) {
+            ans.x = 0;
+            ans.z = 0;
+        }
+        return ans + ans_debug;
         // return spectrum->srgb(swl, Li);
-        return spectrum->srgb(swl, Li) + ans_debug;
         // Float3 ans_3 = spectrum->srgb(swl, Li_3);
         // Float3 ans_4 = spectrum->srgb(swl, Li_4);
         // Float3 ans = spectrum->srgb(swl, Li);
